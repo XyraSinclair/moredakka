@@ -123,17 +123,23 @@ def main(argv: list[str] | None = None) -> int:
             hint = "fix moredakka.toml or pass `--config <valid-path>`"
         return _emit_cli_error(message, hint=hint)
 
+    run_artifact = getattr(result, "run_artifact", None)
+    run_artifact_path = getattr(result, "run_artifact_path", None)
     markdown = render_markdown(
         packet=result.packet,
         synthesis=result.synthesis,
         rounds=result.rounds,
         provider_notes=result.provider_notes,
+        run_artifact=run_artifact,
+        run_artifact_path=run_artifact_path,
     )
     json_text = render_json(
         packet=result.packet,
         synthesis=result.synthesis,
         rounds=result.rounds,
         provider_notes=result.provider_notes,
+        run_artifact=run_artifact,
+        run_artifact_path=run_artifact_path,
     )
 
     if args.write_prefix:

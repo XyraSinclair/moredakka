@@ -167,6 +167,9 @@ Stop when any of the following occur:
 - novelty falls below threshold
 - all major risks are stable across successive rounds
 - commit plan converges
+- total-token budget is exceeded
+- cost budget is exceeded
+- wall-clock budget is exceeded
 
 ### Novelty heuristic
 
@@ -191,6 +194,13 @@ The synthesis report must produce:
 - `confidence`
 - `confidence_rationale`
 
+The final user-visible report should also surface invocation provenance:
+- invocation id
+- run artifact path
+- stop reason
+- usage / cost summary
+- context rendering / truncation summary
+
 ## Why this architecture
 
 This design is grounded in a few current platform realities:
@@ -211,6 +221,7 @@ This design is grounded in a few current platform realities:
 - Prefer a reversible move over a sweeping one.
 - Every report should contain at least one explicit validation step.
 - Every report should contain at least one explicit “do not do this yet” line when appropriate.
+- Every orchestration invocation should leave behind a durable run artifact with prompts, responses, usage, and stop reason.
 
 ## Quality bar
 

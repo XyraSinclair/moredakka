@@ -68,15 +68,80 @@ def _render_disagreement(disagreement: dict[str, Any]) -> str:
     )
 
 
+def _usage_lines(run_artifact: dict[str, Any] | None) -> list[str]:
+    if not run_artifact:
+        return ["- none"]
+    totals = run_artifact.get("usage_totals", {}) or {}
+    out: list[str] = []
+    for key in [
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "reasoning_tokens",
+        "cached_input_tokens",
+        "estimated_cost_usd",
+    ]:
+        value = totals.get(key)
+        if value is None:
+            continue
+        out.append(f"- {key}={value}")
+    return out or ["- none"]
+
+
+def _invocation_lines(run_artifact: dict[str, Any] | None, run_artifact_path: str | None) -> list[str]:
+    if not run_artifact:
+        return ["- none"]
+    invocation = run_artifact.get("invocation", {}) or {}
+    repo = run_artifact.get("repo", {}) or {}
+    lines = [
+        f"- invocation_id={invocation.get('invocation_id', '(none)')}",
+        f"- run_status={invocation.get('run_status', '(none)')}",
+        f"- stop_reason={invocation.get('stop_reason', '(none)')}",
+        f"- started_at={invocation.get('started_at', '(none)')}",
+        f"- duration_ms={invocation.get('duration_ms', '(none)')}",
+        f"- head_sha={repo.get('head_sha', '(none)')}",
+        f"- merge_base={repo.get('merge_base', '(none)')}",
+    ]
+    if run_artifact_path:
+        lines.append(f"- run_artifact={run_artifact_path}")
+    return lines
+
+
+def _context_render_lines(run_artifact: dict[str, Any] | None) -> list[str]:
+    if not run_artifact:
+        return ["- none"]
+    stats = run_artifact.get("context_rendering", {}) or {}
+    lines = []
+    for key in [
+        "char_budget",
+        "rendered_chars",
+        "source_excerpt_chars",
+        "truncated",
+        "doc_count",
+        "file_excerpt_count",
+        "changed_file_count",
+    ]:
+        value = stats.get(key)
+        if value is None:
+            continue
+        lines.append(f"- {key}={value}")
+    return lines or ["- none"]
+
+
 def render_markdown(
     *,
     packet: ContextPacket,
     synthesis: dict[str, Any],
     rounds: list[list[dict[str, Any]]],
     provider_notes: list[str],
+    run_artifact: dict[str, Any] | None = None,
+    run_artifact_path: str | None = None,
 ) -> str:
     lines: list[str] = []
     lines.append("# moredakka report")
+    lines.append("")
+    lines.append("## invocation")
+    lines.extend(_invocation_lines(run_artifact, run_artifact_path))
     lines.append("")
     lines.append("## inferred objective")
     lines.append(synthesis.get("inferred_objective", packet.inferred_objective))
@@ -128,16 +193,26 @@ def render_markdown(
     lines.append("## confidence")
     lines.append(f"{synthesis.get('confidence', 0):.2f} — {synthesis.get('confidence_rationale', '')}")
     lines.append("")
+    lines.append("## usage and cost")
+    lines.extend(_usage_lines(run_artifact))
+    lines.append("")
+    lines.append("## context rendering")
+    lines.extend(_context_render_lines(run_artifact))
+    lines.append("")
     lines.append("## provider roster")
     lines.append(_bullet_list(provider_notes))
     lines.append("")
     lines.append("## context summary")
-    lines.append(_bullet_list([
-        f"mode={packet.mode}",
-        f"branch={packet.branch or '(none)'}",
-        f"changed_files={', '.join(packet.changed_files) if packet.changed_files else '(none)'}",
-        f"base_ref={packet.base_ref}",
-    ]))
+    lines.append(
+        _bullet_list(
+            [
+                f"mode={packet.mode}",
+                f"branch={packet.branch or '(none)'}",
+                f"changed_files={', '.join(packet.changed_files) if packet.changed_files else '(none)'}",
+                f"base_ref={packet.base_ref}",
+            ]
+        )
+    )
     lines.append("")
     lines.append("## role rounds")
     for idx, round_outputs in enumerate(rounds, start=1):
@@ -156,11 +231,15 @@ def render_json(
     synthesis: dict[str, Any],
     rounds: list[list[dict[str, Any]]],
     provider_notes: list[str],
+    run_artifact: dict[str, Any] | None = None,
+    run_artifact_path: str | None = None,
 ) -> str:
     payload = {
         "context_packet": packet.to_dict(),
         "synthesis": synthesis,
         "rounds": rounds,
         "providers": provider_notes,
+        "run": run_artifact,
+        "run_artifact_path": run_artifact_path,
     }
     return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"

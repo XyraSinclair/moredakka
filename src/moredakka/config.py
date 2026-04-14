@@ -16,6 +16,8 @@ class ProviderConfig:
     base_url: str | None = None
     app_url: str | None = None
     app_name: str | None = None
+    input_cost_per_million_tokens: float | None = None
+    output_cost_per_million_tokens: float | None = None
 
 
 @dataclass
@@ -31,7 +33,11 @@ class DefaultsConfig:
     base_ref: str = "main"
     char_budget: int = 24000
     cache_dir: str = ".moredakka/cache"
+    run_dir: str = ".moredakka/runs"
     novelty_threshold: float = 0.15
+    max_total_tokens: int | None = None
+    max_cost_usd: float | None = None
+    max_wall_seconds: int | None = None
 
 
 @dataclass
@@ -140,8 +146,16 @@ def _validate_config(cfg: AppConfig) -> AppConfig:
         raise RuntimeError("defaults.novelty_threshold must be between 0 and 1")
     if not cfg.defaults.cache_dir.strip():
         raise RuntimeError("defaults.cache_dir must not be empty")
+    if not cfg.defaults.run_dir.strip():
+        raise RuntimeError("defaults.run_dir must not be empty")
     if not cfg.defaults.base_ref.strip():
         raise RuntimeError("defaults.base_ref must not be empty")
+    if cfg.defaults.max_total_tokens is not None and cfg.defaults.max_total_tokens < 1:
+        raise RuntimeError("defaults.max_total_tokens must be at least 1 when set")
+    if cfg.defaults.max_cost_usd is not None and cfg.defaults.max_cost_usd < 0:
+        raise RuntimeError("defaults.max_cost_usd must be non-negative when set")
+    if cfg.defaults.max_wall_seconds is not None and cfg.defaults.max_wall_seconds < 1:
+        raise RuntimeError("defaults.max_wall_seconds must be at least 1 when set")
 
     unknown_kinds = [
         f"{name}={provider.kind}"
@@ -169,6 +183,21 @@ def _validate_config(cfg: AppConfig) -> AppConfig:
     if invalid_reasoning:
         raise RuntimeError(
             "Unsupported reasoning_effort value(s): " + ", ".join(sorted(invalid_reasoning))
+        )
+
+    invalid_pricing = [
+        name
+        for name, provider in cfg.providers.items()
+        if (
+            provider.input_cost_per_million_tokens is not None and provider.input_cost_per_million_tokens < 0
+        )
+        or (
+            provider.output_cost_per_million_tokens is not None and provider.output_cost_per_million_tokens < 0
+        )
+    ]
+    if invalid_pricing:
+        raise RuntimeError(
+            "Provider pricing must be non-negative when set: " + ", ".join(sorted(invalid_pricing))
         )
 
     missing_required_roles = sorted(REQUIRED_ROLE_NAMES - set(cfg.roles))
@@ -204,7 +233,23 @@ def load_config(*, cwd: Path, explicit_path: str | None = None) -> AppConfig:
         base_ref=str(defaults.get("base_ref", cfg.defaults.base_ref)),
         char_budget=int(defaults.get("char_budget", cfg.defaults.char_budget)),
         cache_dir=str(defaults.get("cache_dir", cfg.defaults.cache_dir)),
+        run_dir=str(defaults.get("run_dir", cfg.defaults.run_dir)),
         novelty_threshold=float(defaults.get("novelty_threshold", cfg.defaults.novelty_threshold)),
+        max_total_tokens=(
+            int(defaults["max_total_tokens"])
+            if defaults.get("max_total_tokens") is not None
+            else cfg.defaults.max_total_tokens
+        ),
+        max_cost_usd=(
+            float(defaults["max_cost_usd"])
+            if defaults.get("max_cost_usd") is not None
+            else cfg.defaults.max_cost_usd
+        ),
+        max_wall_seconds=(
+            int(defaults["max_wall_seconds"])
+            if defaults.get("max_wall_seconds") is not None
+            else cfg.defaults.max_wall_seconds
+        ),
     )
 
     raw_providers = raw.get("providers", {})
@@ -219,6 +264,16 @@ def load_config(*, cwd: Path, explicit_path: str | None = None) -> AppConfig:
             base_url=merged.get("base_url"),
             app_url=merged.get("app_url"),
             app_name=merged.get("app_name"),
+            input_cost_per_million_tokens=(
+                float(merged["input_cost_per_million_tokens"])
+                if merged.get("input_cost_per_million_tokens") is not None
+                else None
+            ),
+            output_cost_per_million_tokens=(
+                float(merged["output_cost_per_million_tokens"])
+                if merged.get("output_cost_per_million_tokens") is not None
+                else None
+            ),
         )
     for name, provider_raw in raw_providers.items():
         if name not in cfg.providers:
@@ -231,6 +286,16 @@ def load_config(*, cwd: Path, explicit_path: str | None = None) -> AppConfig:
                 base_url=provider_raw.get("base_url"),
                 app_url=provider_raw.get("app_url"),
                 app_name=provider_raw.get("app_name"),
+                input_cost_per_million_tokens=(
+                    float(provider_raw["input_cost_per_million_tokens"])
+                    if provider_raw.get("input_cost_per_million_tokens") is not None
+                    else None
+                ),
+                output_cost_per_million_tokens=(
+                    float(provider_raw["output_cost_per_million_tokens"])
+                    if provider_raw.get("output_cost_per_million_tokens") is not None
+                    else None
+                ),
             )
 
     raw_roles = raw.get("roles", {})

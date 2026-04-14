@@ -127,6 +127,54 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 load_config(cwd=root)
 
+    def test_load_config_reads_run_and_pricing_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "moredakka.toml").write_text(
+                "\n".join(
+                    [
+                        "[defaults]",
+                        "run_dir = '.moredakka/runs'",
+                        "max_total_tokens = 12345",
+                        "max_cost_usd = 1.25",
+                        "max_wall_seconds = 30",
+                        "[providers.openrouter_planner]",
+                        "input_cost_per_million_tokens = 2.5",
+                        "output_cost_per_million_tokens = 10.0",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            config = load_config(cwd=root)
+
+            self.assertEqual(config.defaults.run_dir, '.moredakka/runs')
+            self.assertEqual(config.defaults.max_total_tokens, 12345)
+            self.assertEqual(config.defaults.max_cost_usd, 1.25)
+            self.assertEqual(config.defaults.max_wall_seconds, 30)
+            self.assertEqual(config.providers['openrouter_planner'].input_cost_per_million_tokens, 2.5)
+            self.assertEqual(config.providers['openrouter_planner'].output_cost_per_million_tokens, 10.0)
+
+    def test_load_config_rejects_invalid_budget_and_pricing_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "moredakka.toml").write_text(
+                "\n".join(
+                    [
+                        "[defaults]",
+                        "max_total_tokens = 0",
+                        "[providers.openrouter_planner]",
+                        "input_cost_per_million_tokens = -1",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(RuntimeError):
+                load_config(cwd=root)
+
 
 if __name__ == "__main__":
     unittest.main()

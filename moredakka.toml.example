@@ -4,7 +4,11 @@ max_rounds = 2
 base_ref = "main"
 char_budget = 24000
 cache_dir = ".moredakka/cache"
+run_dir = ".moredakka/runs"
 novelty_threshold = 0.15
+# max_total_tokens = 120000
+# max_cost_usd = 2.50
+# max_wall_seconds = 120
 
 # Canonical default: one OpenRouter-backed roster with real contrast across roles.
 # All providers below share the same OPENROUTER_API_KEY but use different model families.
@@ -15,6 +19,8 @@ model = "anthropic/claude-opus-4.6"
 api_key_env = "OPENROUTER_API_KEY"
 base_url = "https://openrouter.ai/api/v1"
 app_name = "moredakka"
+# input_cost_per_million_tokens = 15.00
+# output_cost_per_million_tokens = 75.00
 
 [providers.openrouter_implementer]
 kind = "openrouter"

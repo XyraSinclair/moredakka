@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 import threading
 import tempfile
@@ -81,6 +82,49 @@ class _BarrierProvider:
             raw_text="{}",
             response_id=None,
             usage=None,
+        )
+
+
+class _BudgetProvider:
+    supports_previous_response_id = False
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.model = f"{name}-model"
+
+    def generate_json(
+        self,
+        *,
+        system: str,
+        user: str,
+        schema_name: str,
+        schema: dict[str, object],
+        previous_response_id: str | None = None,
+    ) -> ProviderResult:
+        del system, user, schema, previous_response_id
+        if schema_name != "moredakka_role_analysis":
+            raise AssertionError("synthesis should not run after budget stop")
+        return ProviderResult(
+            provider=self.name,
+            model=self.model,
+            data={
+                "role": "planner",
+                "focus": "focus",
+                "one_sentence_take": "take",
+                "top_problems": [],
+                "candidate_paths": [],
+                "recommended_steps": [],
+                "tests": [],
+                "risks": [],
+                "edits": [],
+                "assumptions": [],
+                "questions": [],
+                "stop_conditions": [],
+                "confidence": 0.5,
+            },
+            raw_text="{}",
+            response_id=None,
+            usage={"total_tokens": 999, "input_tokens": 600, "output_tokens": 399},
         )
 
 
@@ -167,6 +211,82 @@ class NoveltyTests(unittest.TestCase):
         self.assertEqual(len(result.rounds), 1)
         self.assertEqual({item["role"] for item in result.rounds[0]}, {"planner", "implementer"})
         self.assertEqual(result.synthesis["inferred_objective"], "objective")
+        self.assertTrue(result.run_artifact_path)
+        self.assertEqual(result.run_artifact["invocation"]["run_status"], "success")
+        self.assertEqual(result.run_artifact["invocation"]["stop_reason"], "max_rounds")
+        self.assertIn("usage_totals", result.run_artifact)
+        self.assertEqual(result.run_artifact["provider_roster"][-1], "synthesizer: openai/openai-model")
+
+    @patch("moredakka.orchestrator.render_context_packet", return_value="context")
+    @patch("moredakka.orchestrator.build_context_packet")
+    @patch("moredakka.orchestrator.default_role_sequence", return_value=["planner"])
+    @patch("moredakka.orchestrator.build_provider")
+    @patch("moredakka.orchestrator.load_config")
+    def test_run_workflow_degrades_before_synthesis_when_budget_exceeded(
+        self,
+        mock_load_config: unittest.mock.MagicMock,
+        mock_build_provider: unittest.mock.MagicMock,
+        _mock_default_role_sequence: unittest.mock.MagicMock,
+        mock_build_context_packet: unittest.mock.MagicMock,
+        _mock_render_context_packet: unittest.mock.MagicMock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = AppConfig(
+                defaults=DefaultsConfig(max_rounds=2, cache_dir=".moredakka/cache", max_total_tokens=100),
+                providers={
+                    "openai": ProviderConfig(
+                        name="openai",
+                        kind="openai",
+                        model="gpt-5.4",
+                        api_key_env="OPENAI_API_KEY",
+                    )
+                },
+                roles={
+                    "planner": RoleConfig(name="planner", provider="openai"),
+                    "synthesizer": RoleConfig(name="synthesizer", provider="openai"),
+                },
+            )
+            packet = ContextPacket(
+                cwd=str(root),
+                repo_root=str(root),
+                mode="plan",
+                objective="",
+                inferred_objective="objective",
+                base_ref="main",
+                branch=None,
+            )
+            mock_load_config.return_value = config
+            mock_build_provider.side_effect = lambda provider_cfg: _BudgetProvider(provider_cfg.name)
+            mock_build_context_packet.return_value = packet
+
+            result = run_workflow(
+                cwd=root,
+                mode="plan",
+                objective=None,
+                rounds=2,
+                use_cache=False,
+            )
+
+        self.assertEqual(result.run_artifact["invocation"]["run_status"], "degraded")
+        self.assertEqual(result.run_artifact["invocation"]["stop_reason"], "max_total_tokens")
+        self.assertEqual(result.synthesis["selected_path"]["name"], "bounded-stop")
+        self.assertEqual(result.provider_notes, ["planner: openai/openai-model"])
+
+    def test_run_workflow_persists_failed_invocations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "moredakka.toml").write_text("[defaults]\nmode = 'invalid'\n", encoding="utf-8")
+
+            with self.assertRaises(RuntimeError):
+                run_workflow(cwd=root, mode="plan", objective=None, use_cache=False)
+
+            run_files = sorted((root / ".moredakka" / "runs").rglob("*.json"))
+            self.assertTrue(run_files)
+            payload = json.loads(run_files[-1].read_text(encoding="utf-8"))
+            self.assertEqual(payload["invocation"]["run_status"], "failed")
+            self.assertEqual(payload["invocation"]["stop_reason"], "error")
+            self.assertEqual(payload["error"]["type"], "RuntimeError")
 
 
 if __name__ == "__main__":

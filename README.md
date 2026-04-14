@@ -25,6 +25,7 @@ It is deliberately narrower than an open-ended coding agent. It does not try to 
   - risks
   - disagreement log
 - Caches identical calls locally so repeated inspection is cheaper.
+- Writes one durable run artifact per invocation with provenance, prompts, responses, usage, and stop reason.
 
 ## Default model roster
 
@@ -96,6 +97,11 @@ The Rust crate is intentionally narrow for now:
 
 Python remains the canonical orchestration surface for `here`, `plan`, `review`, `patch`, and `loop`.
 
+The current foundational completeness seam is:
+- Rust owns the compact deterministic local-surface sidecar (`doctor`, `pack`)
+- Python still owns provider orchestration
+- each orchestration run now emits a durable run artifact under `.moredakka/runs/`
+
 ## Development
 
 ```bash
@@ -123,6 +129,9 @@ Config lets you change:
 - char budgets
 - base ref
 - cache directory
+- run artifact directory
+- optional hard bounds for total tokens, cost, and wall time
+- optional per-provider price hints for local cost estimation
 
 Example contrast-role override:
 
@@ -144,6 +153,7 @@ provider = "openrouter_breaker"
 
 Every non-`pack` command returns a unified report with:
 
+- invocation id and run artifact path
 - inferred objective
 - top problems
 - selected path
@@ -155,6 +165,8 @@ Every non-`pack` command returns a unified report with:
 - disagreements
 - stop conditions
 - confidence
+- usage/cost summary
+- context rendering/truncation summary
 
 ## Philosophy
 
