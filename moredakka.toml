@@ -1,0 +1,60 @@
+[defaults]
+mode = "plan"
+max_rounds = 2
+base_ref = "main"
+char_budget = 24000
+cache_dir = ".moredakka/cache"
+novelty_threshold = 0.15
+
+[providers.openrouter_planner]
+kind = "openrouter"
+model = "anthropic/claude-opus-4.6"
+api_key_env = "OPENROUTER_API_KEY"
+base_url = "https://openrouter.ai/api/v1"
+app_name = "moredakka"
+
+[providers.openrouter_implementer]
+kind = "openrouter"
+model = "openai/gpt-5.4"
+api_key_env = "OPENROUTER_API_KEY"
+reasoning_effort = "medium"
+base_url = "https://openrouter.ai/api/v1"
+app_name = "moredakka"
+
+[providers.openrouter_breaker]
+kind = "openrouter"
+model = "google/gemini-3.1-pro-preview"
+api_key_env = "OPENROUTER_API_KEY"
+base_url = "https://openrouter.ai/api/v1"
+app_name = "moredakka"
+
+[providers.openrouter_minimalist]
+kind = "openrouter"
+model = "openai/gpt-5.4-mini"
+api_key_env = "OPENROUTER_API_KEY"
+reasoning_effort = "medium"
+base_url = "https://openrouter.ai/api/v1"
+app_name = "moredakka"
+
+[providers.openrouter_synthesizer]
+kind = "openrouter"
+model = "openai/gpt-5.4"
+api_key_env = "OPENROUTER_API_KEY"
+reasoning_effort = "medium"
+base_url = "https://openrouter.ai/api/v1"
+app_name = "moredakka"
+
+[roles.planner]
+provider = "openrouter_planner"
+
+[roles.implementer]
+provider = "openrouter_implementer"
+
+[roles.breaker]
+provider = "openrouter_breaker"
+
+[roles.minimalist]
+provider = "openrouter_minimalist"
+
+[roles.synthesizer]
+provider = "openrouter_synthesizer"

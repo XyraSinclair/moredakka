@@ -1,0 +1,13 @@
+id,mode,should_trigger,prompt
+mk-01,plan,true,"Use the $moredakka skill to tell me what I should do next on this auth refresh branch."
+mk-02,review,true,"Review this branch versus main and tell me the top risks and missing tests."
+mk-03,patch,true,"Turn the current diff into a minimal safe patch plan."
+mk-04,plan,true,"I'm in a repo with a messy deploy fix. Give me the next 3 commits."
+mk-05,plan,true,"What is the smallest credible path to get this work into a safer state?"
+mk-06,review,true,"Audit this branch brutally for correctness and rollback safety."
+mk-07,plan,false,"Rename this one local variable."
+mk-08,plan,false,"Explain what memoization is."
+mk-09,patch,true,"Use the current work surface only and give me exact edit targets."
+mk-10,loop,true,"Run a harder multi-pass critique and preserve only the disagreements that matter."
+mk-11,plan,false,"Write a haiku about databases."
+mk-12,review,true,"What would break if I merged this branch today?"

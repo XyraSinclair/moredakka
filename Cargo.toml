@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/moredakka-core"]
+resolver = "2"

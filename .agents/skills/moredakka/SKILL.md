@@ -1,75 +1,134 @@
 ---
 name: moredakka
-description: >-
-  Throw a multi-model planning swarm at the current coding task. Uses repeated
-  GPT-5.4-Pro passes plus Gemini 3.1, Codex, Claude, Kimi, and optional Grok
-  to tighten the plan of operations before implementation. Use when the user
-  asks for "more dakka", more tokens, more diverse models, or wants a stronger
-  plan before coding.
+description: Use when you need a hard, bounded, multi-model improvement loop over the current software work surface. Best for prompts like "what should I do next here?", "review this branch brutally", "turn this diff into a minimal patch plan", or "give me the next 3 commits for this mess". Do not use for trivial one-file edits, non-software tasks, or broad research detached from the current working tree.
 ---
 
-# Moredakka
+## What this skill is for
 
-Use this skill when the user wants to brute-force better planning with more
-model diversity instead of debating the plan manually.
+This skill turns the current local software task into a disciplined multi-role analysis loop.
 
-## What it does
+It should stay glued to the current work surface:
+- current directory
+- git branch
+- changed files
+- diff
+- nearby docs like `README.md`, `AGENTS.md`, `PLAN.md`, `TODO.md`, `SPEC.md`
+- repo-local skill manifests if relevant
 
-`bin/moredakka` snapshots the current workspace, fans out a planning prompt to
-multiple top models, then runs one or more synthesis passes to produce a single
-actionable plan.
+Then it should apply a bounded role loop:
+- planner
+- implementer
+- breaker
+- minimalist
+- synthesizer
 
-Default stack:
-- repeated `gpt-5.4-pro` planning passes
-- `gpt-5.4-codex` repo recon
-- `gemini-3.1-pro-preview`
-- `claude-sonnet-4.6` through OpenRouter when available
-- `moonshotai/kimi-k2.5` through OpenRouter when available
-- `x-ai/grok-4` in `--profile heavy`
+The output must be an operating report, not a brainstorm.
 
-## How to use it
+## When to use it
 
-1. Summarize the current task in one sentence.
-2. Pass any relevant paths with `--focus`.
-3. Read the synthesized plan and use it to drive implementation.
+Use this skill when the user is effectively asking for one of these:
 
-Basic:
+- tell me what I am actually working on and what to do next
+- review the current branch or diff hard
+- turn a messy work surface into a plan of operations
+- extract a minimal patch path
+- get a stronger next-step sequence than one single model pass would give
+
+## When not to use it
+
+Do not use this skill when:
+
+- the task is a trivial direct edit
+- there is no meaningful local software context
+- the user wants broad open-ended research rather than action on the current working tree
+- the user needs actual patch application more than planning or review
+
+## Required behavior
+
+1. **Stay local first.**
+   Read the current work surface before making recommendations.
+
+2. **Prefer diffs over file dumps.**
+   The delta matters more than the entire repo.
+
+3. **Use bounded loops.**
+   Usually 2 rounds is enough. Stop when novelty collapses.
+
+4. **Assign distinct roles.**
+   Do not ask every model the same thing.
+
+5. **Use typed outputs.**
+   Preserve clear fields: problems, actions, tests, risks, edits, commit plan, disagreements.
+
+6. **Emit one recommended path.**
+   The user should get a concrete next move.
+
+## If the CLI is installed
+
+Run the CLI from the repo root or current module root:
 
 ```bash
-bin/moredakka "Implement X in the current repo"
+moredakka here
+moredakka plan --objective "<objective>"
+moredakka review --base-ref main
+moredakka patch --objective "<objective>"
+moredakka loop --rounds 3
 ```
 
-Focused:
+If you want the raw local context packet:
 
 ```bash
-bin/moredakka \
-  --focus path/to/file.py \
-  --focus path/to/tests \
-  "Figure out the best plan to implement X safely"
+moredakka pack --mode plan
 ```
 
-Cheaper / faster:
+If you want saved reports:
 
 ```bash
-bin/moredakka --profile fast --iterations 1 "..."
+moredakka review --base-ref main --write-prefix .moredakka/latest
 ```
 
-Heavier:
+If you are in the source repo and have not installed the package yet, the repo-local wrapper works too:
 
 ```bash
-bin/moredakka --profile heavy --iterations 2 "..."
+bin/moredakka here
 ```
 
-Preview without spending tokens:
+## If the CLI is not installed
 
-```bash
-bin/moredakka --dry-run "..."
-```
+Emulate the same contract manually:
 
-## Rules
+1. Inspect current branch, status, recent commits, and working diff.
+2. Read nearby docs.
+3. Infer the immediate objective.
+4. Run the equivalent role loop in a bounded way.
+5. Return the same report sections the CLI would produce.
 
-- Use this before substantial implementation work, not after the code is already done.
-- Give it the real task, not a vague "help me think".
-- Add `--focus` paths when you already know the hot files.
-- Treat the output as a planning artifact, not gospel. Execute the good parts.
-- Artifacts are written under `.moredakka/runs/`.
+## Report contract
+
+Your final report should contain these sections:
+
+- inferred objective
+- one-line take
+- selected path
+- top problems
+- next actions
+- commit plan
+- tests
+- edit targets
+- major risks
+- disagreements
+- stop conditions
+- open questions
+- confidence
+
+## Quality bar
+
+The report must be:
+
+- operational
+- falsifiable
+- tied to files and commands when possible
+- explicit about uncertainty
+- minimal enough to act on now
+
+Read `references/moredakka-contract.md` if you need a compact contract summary.

@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moredakka"
+version = "0.1.0"
+description = "A bounded multi-model plan-improvement CLI for live software work."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Xyra Sinclair" }]
+dependencies = [
+  "openai>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+gemini = [
+  "google-genai>=1.0.0",
+]
+
+[project.scripts]
+moredakka = "moredakka.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+moredakka = ["prompts/*.md"]
