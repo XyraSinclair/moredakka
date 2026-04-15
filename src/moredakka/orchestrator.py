@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ from typing import Any
 
 from moredakka.config import AppConfig, _default_config, load_config
 from moredakka.context import ContextPacket, build_context_packet, render_context_packet
+from moredakka.errors import MoreDakkaRuntimeError
 from moredakka.providers import build_provider
 from moredakka.providers.base import ProviderResult
 from moredakka.roles import ROLE_SPECS, default_role_sequence, load_prompt, mode_instruction
@@ -19,6 +21,7 @@ from moredakka.runlog import (
     estimate_cost_usd,
     isoformat_z,
     make_invocation_id,
+    preflight_run_dir,
     normalize_usage,
     repo_metadata,
     to_jsonable,
@@ -32,7 +35,7 @@ from moredakka.schemas import (
     role_analysis_schema,
     synthesis_schema,
 )
-from moredakka.util import ensure_dir, flatten_strings, normalize_phrase, sha256_json
+from moredakka.util import ensure_dir, flatten_strings, normalize_phrase, sha256_json, write_text_atomic
 
 
 @dataclass
@@ -211,20 +214,27 @@ def _cached_generate(
     key = sha256_json(signature)
     path = _cache_path(cache_dir, key)
     if use_cache and path.exists():
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        return CachedCallResult(
-            result=ProviderResult(
-                provider=payload["provider"],
-                model=payload["model"],
-                data=payload["data"],
-                raw_text=payload["raw_text"],
-                response_id=payload.get("response_id"),
-                usage=payload.get("usage"),
-            ),
-            cache_key=key,
-            cache_hit=True,
-            duration_ms=0,
-        )
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return CachedCallResult(
+                result=ProviderResult(
+                    provider=payload["provider"],
+                    model=payload["model"],
+                    data=payload["data"],
+                    raw_text=payload["raw_text"],
+                    response_id=payload.get("response_id"),
+                    usage=payload.get("usage"),
+                ),
+                cache_key=key,
+                cache_hit=True,
+                duration_ms=0,
+            )
+        except Exception:
+            corrupt_path = path.with_suffix(".corrupt")
+            try:
+                os.replace(path, corrupt_path)
+            except OSError:
+                pass
     started = time.perf_counter()
     result = provider.generate_json(
         system=system,
@@ -236,7 +246,8 @@ def _cached_generate(
     duration_ms = int((time.perf_counter() - started) * 1000)
     if use_cache:
         ensure_dir(cache_dir)
-        path.write_text(
+        write_text_atomic(
+            path,
             json.dumps(
                 {
                     "provider": result.provider,
@@ -249,7 +260,6 @@ def _cached_generate(
                 indent=2,
                 ensure_ascii=False,
             ),
-            encoding="utf-8",
         )
     return CachedCallResult(result=result, cache_key=key, cache_hit=False, duration_ms=duration_ms)
 
@@ -436,6 +446,7 @@ def run_workflow(
         base_ref = base_ref or config.defaults.base_ref
         rounds = rounds or config.defaults.max_rounds
         char_budget = char_budget or config.defaults.char_budget
+        preflight_run_dir(cwd=cwd, run_dir=config.defaults.run_dir)
 
         packet = build_context_packet(
             cwd=cwd,
@@ -662,10 +673,16 @@ def run_workflow(
             run_status="failed",
             error={"type": type(exc).__name__, "message": str(exc)},
         )
-        write_run_artifact(
-            cwd=cwd,
-            run_dir=config.defaults.run_dir,
-            invocation_id=invocation_id,
-            artifact=artifact,
-        )
-        raise
+        artifact_path = None
+        try:
+            artifact_path = str(
+                write_run_artifact(
+                    cwd=cwd,
+                    run_dir=config.defaults.run_dir,
+                    invocation_id=invocation_id,
+                    artifact=artifact,
+                )
+            )
+        except Exception:
+            artifact_path = None
+        raise MoreDakkaRuntimeError(str(exc), run_artifact_path=artifact_path) from exc

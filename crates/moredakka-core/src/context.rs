@@ -131,6 +131,20 @@ fn collect_docs(cwd: &Path, repo_root: Option<&Path>) -> Vec<PathBuf> {
                 }
             }
         }
+        let skill_dir = dir.join(".agents").join("skills");
+        if skill_dir.exists() {
+            if let Ok(entries) = skill_dir.read_dir() {
+                for entry in entries.flatten() {
+                    let manifest = entry.path().join("SKILL.md");
+                    if manifest.exists() && !docs.contains(&manifest) {
+                        docs.push(manifest);
+                        if docs.len() >= 6 {
+                            return docs;
+                        }
+                    }
+                }
+            }
+        }
         if dir == stop {
             break;
         }

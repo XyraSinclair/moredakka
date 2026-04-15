@@ -52,6 +52,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(stdout_buffer.getvalue(), "")
         self.assertIn("error:", stderr_buffer.getvalue())
         self.assertIn("does-not-exist", stderr_buffer.getvalue())
+        self.assertIn("inspect run artifact at", stderr_buffer.getvalue())
         self.assertNotIn("Traceback", stderr_buffer.getvalue())
 
     @patch("moredakka.cli.run_doctor")

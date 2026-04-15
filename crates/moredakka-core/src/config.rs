@@ -14,6 +14,8 @@ pub struct ProviderConfig {
     pub base_url: Option<String>,
     pub app_url: Option<String>,
     pub app_name: Option<String>,
+    pub input_cost_per_million_tokens: Option<f64>,
+    pub output_cost_per_million_tokens: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -29,7 +31,11 @@ pub struct DefaultsConfig {
     pub base_ref: String,
     pub char_budget: usize,
     pub cache_dir: String,
+    pub run_dir: String,
     pub novelty_threshold: f64,
+    pub max_total_tokens: Option<usize>,
+    pub max_cost_usd: Option<f64>,
+    pub max_wall_seconds: Option<usize>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -53,7 +59,11 @@ struct TomlDefaults {
     base_ref: Option<String>,
     char_budget: Option<usize>,
     cache_dir: Option<String>,
+    run_dir: Option<String>,
     novelty_threshold: Option<f64>,
+    max_total_tokens: Option<usize>,
+    max_cost_usd: Option<f64>,
+    max_wall_seconds: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -65,6 +75,8 @@ struct TomlProvider {
     base_url: Option<String>,
     app_url: Option<String>,
     app_name: Option<String>,
+    input_cost_per_million_tokens: Option<f64>,
+    output_cost_per_million_tokens: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -85,6 +97,8 @@ pub fn default_config() -> AppConfig {
                 base_url: Some("https://openrouter.ai/api/v1".into()),
                 app_url: None,
                 app_name: Some("moredakka".into()),
+                input_cost_per_million_tokens: None,
+                output_cost_per_million_tokens: None,
             },
         ),
         (
@@ -98,6 +112,8 @@ pub fn default_config() -> AppConfig {
                 base_url: Some("https://openrouter.ai/api/v1".into()),
                 app_url: None,
                 app_name: Some("moredakka".into()),
+                input_cost_per_million_tokens: None,
+                output_cost_per_million_tokens: None,
             },
         ),
         (
@@ -111,6 +127,8 @@ pub fn default_config() -> AppConfig {
                 base_url: Some("https://openrouter.ai/api/v1".into()),
                 app_url: None,
                 app_name: Some("moredakka".into()),
+                input_cost_per_million_tokens: None,
+                output_cost_per_million_tokens: None,
             },
         ),
         (
@@ -124,6 +142,8 @@ pub fn default_config() -> AppConfig {
                 base_url: Some("https://openrouter.ai/api/v1".into()),
                 app_url: None,
                 app_name: Some("moredakka".into()),
+                input_cost_per_million_tokens: None,
+                output_cost_per_million_tokens: None,
             },
         ),
         (
@@ -137,6 +157,8 @@ pub fn default_config() -> AppConfig {
                 base_url: Some("https://openrouter.ai/api/v1".into()),
                 app_url: None,
                 app_name: Some("moredakka".into()),
+                input_cost_per_million_tokens: None,
+                output_cost_per_million_tokens: None,
             },
         ),
     ]);
@@ -184,7 +206,11 @@ pub fn default_config() -> AppConfig {
             base_ref: "main".into(),
             char_budget: 24_000,
             cache_dir: ".moredakka/cache".into(),
+            run_dir: ".moredakka/runs".into(),
             novelty_threshold: 0.15,
+            max_total_tokens: None,
+            max_cost_usd: None,
+            max_wall_seconds: None,
         },
         providers,
         roles,
@@ -229,8 +255,20 @@ pub fn load_config(cwd: &Path, explicit: Option<&Path>) -> Result<(AppConfig, Op
         if let Some(v) = defaults.cache_dir {
             cfg.defaults.cache_dir = v;
         }
+        if let Some(v) = defaults.run_dir {
+            cfg.defaults.run_dir = v;
+        }
         if let Some(v) = defaults.novelty_threshold {
             cfg.defaults.novelty_threshold = v;
+        }
+        if let Some(v) = defaults.max_total_tokens {
+            cfg.defaults.max_total_tokens = Some(v);
+        }
+        if let Some(v) = defaults.max_cost_usd {
+            cfg.defaults.max_cost_usd = Some(v);
+        }
+        if let Some(v) = defaults.max_wall_seconds {
+            cfg.defaults.max_wall_seconds = Some(v);
         }
     }
     if let Some(providers) = raw.providers {
@@ -244,6 +282,8 @@ pub fn load_config(cwd: &Path, explicit: Option<&Path>) -> Result<(AppConfig, Op
                 base_url: None,
                 app_url: None,
                 app_name: None,
+                input_cost_per_million_tokens: None,
+                output_cost_per_million_tokens: None,
             });
             if let Some(v) = provider_raw.kind {
                 entry.kind = v;
@@ -265,6 +305,12 @@ pub fn load_config(cwd: &Path, explicit: Option<&Path>) -> Result<(AppConfig, Op
             }
             if let Some(v) = provider_raw.app_name {
                 entry.app_name = Some(v);
+            }
+            if let Some(v) = provider_raw.input_cost_per_million_tokens {
+                entry.input_cost_per_million_tokens = Some(v);
+            }
+            if let Some(v) = provider_raw.output_cost_per_million_tokens {
+                entry.output_cost_per_million_tokens = Some(v);
             }
         }
     }
@@ -290,6 +336,30 @@ pub fn validate_config(cfg: &AppConfig) -> Result<()> {
     if cfg.defaults.cache_dir.trim().is_empty() {
         return Err(anyhow!("defaults.cache_dir must not be empty"));
     }
+    if cfg.defaults.run_dir.trim().is_empty() {
+        return Err(anyhow!("defaults.run_dir must not be empty"));
+    }
+    if let Some(v) = cfg.defaults.max_total_tokens {
+        if v < 1 {
+            return Err(anyhow!(
+                "defaults.max_total_tokens must be at least 1 when set"
+            ));
+        }
+    }
+    if let Some(v) = cfg.defaults.max_cost_usd {
+        if v < 0.0 {
+            return Err(anyhow!(
+                "defaults.max_cost_usd must be non-negative when set"
+            ));
+        }
+    }
+    if let Some(v) = cfg.defaults.max_wall_seconds {
+        if v < 1 {
+            return Err(anyhow!(
+                "defaults.max_wall_seconds must be at least 1 when set"
+            ));
+        }
+    }
     for (name, provider) in &cfg.providers {
         if provider.model.trim().is_empty() || provider.api_key_env.trim().is_empty() {
             return Err(anyhow!(
@@ -303,6 +373,78 @@ pub fn validate_config(cfg: &AppConfig) -> Result<()> {
                 ));
             }
         }
+        if let Some(v) = provider.input_cost_per_million_tokens {
+            if v < 0.0 {
+                return Err(anyhow!(
+                    "provider {name} has negative input_cost_per_million_tokens"
+                ));
+            }
+        }
+        if let Some(v) = provider.output_cost_per_million_tokens {
+            if v < 0.0 {
+                return Err(anyhow!(
+                    "provider {name} has negative output_cost_per_million_tokens"
+                ));
+            }
+        }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{default_config, load_config, validate_config};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("moredakka-core-{name}-{stamp}"));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    #[test]
+    fn load_config_reads_run_and_pricing_fields() {
+        let dir = temp_dir("config");
+        fs::write(
+            dir.join("moredakka.toml"),
+            "[defaults]\nrun_dir = '.moredakka/runs'\nmax_total_tokens = 123\nmax_cost_usd = 1.5\nmax_wall_seconds = 30\n[providers.openrouter_planner]\ninput_cost_per_million_tokens = 2.5\noutput_cost_per_million_tokens = 10.0\n",
+        )
+        .expect("write config");
+
+        let (cfg, _) = load_config(&dir, None).expect("load config");
+        assert_eq!(cfg.defaults.run_dir, ".moredakka/runs");
+        assert_eq!(cfg.defaults.max_total_tokens, Some(123));
+        assert_eq!(cfg.defaults.max_cost_usd, Some(1.5));
+        assert_eq!(cfg.defaults.max_wall_seconds, Some(30));
+        assert_eq!(
+            cfg.providers["openrouter_planner"].input_cost_per_million_tokens,
+            Some(2.5)
+        );
+        assert_eq!(
+            cfg.providers["openrouter_planner"].output_cost_per_million_tokens,
+            Some(10.0)
+        );
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn validate_config_rejects_invalid_budget_and_pricing_fields() {
+        let mut cfg = default_config();
+        cfg.defaults.max_total_tokens = Some(0);
+        assert!(validate_config(&cfg).is_err());
+
+        let mut cfg = default_config();
+        cfg.providers
+            .get_mut("openrouter_planner")
+            .expect("provider")
+            .input_cost_per_million_tokens = Some(-1.0);
+        assert!(validate_config(&cfg).is_err());
+    }
 }

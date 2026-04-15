@@ -9,7 +9,7 @@ from typing import Any, Mapping
 
 from moredakka.config import AppConfig, ProviderConfig, _find_config_path
 from moredakka.context import ContextPacket
-from moredakka.util import ensure_dir, run_command, sha256_json
+from moredakka.util import ensure_dir, run_command, sha256_json, write_text_atomic
 
 
 def utc_now() -> datetime:
@@ -63,11 +63,19 @@ def resolved_run_dir(cwd: Path, run_dir: str) -> Path:
     return (run_dir_path if run_dir_path.is_absolute() else cwd / run_dir_path).resolve()
 
 
-def write_run_artifact(*, cwd: Path, run_dir: str, invocation_id: str, artifact: Mapping[str, Any]) -> Path:
+def preflight_run_dir(*, cwd: Path, run_dir: str) -> Path:
     root = ensure_dir(resolved_run_dir(cwd, run_dir))
+    probe = root / ".write-probe"
+    write_text_atomic(probe, "ok\n")
+    probe.unlink()
+    return root
+
+
+def write_run_artifact(*, cwd: Path, run_dir: str, invocation_id: str, artifact: Mapping[str, Any]) -> Path:
+    root = preflight_run_dir(cwd=cwd, run_dir=run_dir)
     dated = ensure_dir(root / invocation_id[:8])
     path = dated / f"{invocation_id}.json"
-    path.write_text(json.dumps(to_jsonable(dict(artifact)), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_text_atomic(path, json.dumps(to_jsonable(dict(artifact)), indent=2, ensure_ascii=False) + "\n")
     return path
 
 

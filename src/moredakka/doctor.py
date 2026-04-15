@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
 from moredakka.config import AppConfig, _default_config, _find_config_path, load_config
+from moredakka.runlog import resolved_run_dir
 from moredakka.util import ensure_dir, load_local_env, run_command
 
 
@@ -45,25 +46,25 @@ def _module_available(name: str) -> bool:
         return False
 
 
-def _cache_dir_check(cache_dir: Path) -> DoctorCheck:
+def _writable_dir_check(path: Path, *, name: str, fix: str) -> DoctorCheck:
     try:
-        ensure_dir(cache_dir)
-        probe = cache_dir / ".doctor-write-test"
+        ensure_dir(path)
+        probe = path / ".doctor-write-test"
         probe.write_text("ok\n", encoding="utf-8")
         probe.unlink()
         return DoctorCheck(
-            name="cache_dir",
+            name=name,
             status="pass",
-            summary="Cache directory is writable.",
-            detail=str(cache_dir),
+            summary=("Cache directory is writable." if name == "cache_dir" else "Run artifact directory is writable."),
+            detail=str(path),
         )
     except OSError as exc:
         return DoctorCheck(
-            name="cache_dir",
+            name=name,
             status="fail",
-            summary="Cache directory is not writable.",
-            detail=f"{cache_dir}: {exc}",
-            fix="Set defaults.cache_dir to a writable path.",
+            summary=("Cache directory is not writable." if name == "cache_dir" else "Run artifact directory is not writable."),
+            detail=f"{path}: {exc}",
+            fix=fix,
         )
 
 
@@ -272,7 +273,10 @@ def run_doctor(
 
     cache_dir_config = Path(config.defaults.cache_dir).expanduser()
     cache_dir = (cache_dir_config if cache_dir_config.is_absolute() else resolved_cwd / cache_dir_config).resolve()
-    checks.append(_cache_dir_check(cache_dir))
+    checks.append(_writable_dir_check(cache_dir, name="cache_dir", fix="Set defaults.cache_dir to a writable path."))
+
+    run_dir = resolved_run_dir(resolved_cwd, config.defaults.run_dir)
+    checks.append(_writable_dir_check(run_dir, name="run_dir", fix="Set defaults.run_dir to a writable path."))
 
     active_provider_names = {role.provider for role in config.roles.values()}
     for provider_name, provider in config.providers.items():

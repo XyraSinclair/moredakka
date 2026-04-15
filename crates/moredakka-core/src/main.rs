@@ -19,6 +19,8 @@ enum Command {
     Doctor {
         #[arg(long, value_enum, default_value = "markdown")]
         format: OutputFormat,
+        #[arg(long)]
+        config: Option<std::path::PathBuf>,
     },
     Pack {
         #[arg(long, default_value = "main")]
@@ -58,8 +60,8 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     let cwd = std::env::current_dir()?;
     match cli.command {
-        Command::Doctor { format } => {
-            let report = doctor::run_doctor(&cwd)?;
+        Command::Doctor { format, config } => {
+            let report = doctor::run_doctor(&cwd, config.as_deref())?;
             match format {
                 OutputFormat::Markdown => print!("{}", doctor::render_markdown(&report)),
                 OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),

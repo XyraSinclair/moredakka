@@ -46,6 +46,7 @@ class DoctorTests(unittest.TestCase):
         self.assertEqual(checks["git"].status, "pass")
         self.assertEqual(checks["config"].status, "pass")
         self.assertEqual(checks["cache_dir"].status, "pass")
+        self.assertEqual(checks["run_dir"].status, "pass")
         self.assertEqual(checks["provider:openrouter_planner"].status, "pass")
         self.assertEqual(checks["provider:openrouter_implementer"].status, "pass")
         self.assertEqual(checks["provider:openrouter_breaker"].status, "pass")

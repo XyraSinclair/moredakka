@@ -165,11 +165,18 @@ fn repo_checks(cwd: &Path, base_ref: &str, git_ok: bool) -> (DoctorCheck, Doctor
     )
 }
 
-fn cache_check(cwd: &Path, cache_dir: &str) -> DoctorCheck {
-    let resolved = if Path::new(cache_dir).is_absolute() {
-        Path::new(cache_dir).to_path_buf()
+fn writable_dir_check(
+    cwd: &Path,
+    dir: &str,
+    name: &str,
+    pass_summary: &str,
+    fail_summary: &str,
+    fix: &str,
+) -> DoctorCheck {
+    let resolved = if Path::new(dir).is_absolute() {
+        Path::new(dir).to_path_buf()
     } else {
-        cwd.join(cache_dir)
+        cwd.join(dir)
     };
     match fs::create_dir_all(&resolved).and_then(|_| {
         let probe = resolved.join(".doctor-write-test");
@@ -177,18 +184,18 @@ fn cache_check(cwd: &Path, cache_dir: &str) -> DoctorCheck {
         fs::remove_file(&probe)
     }) {
         Ok(_) => DoctorCheck {
-            name: "cache_dir".into(),
+            name: name.into(),
             status: "pass".into(),
-            summary: "Cache directory is writable.".into(),
+            summary: pass_summary.into(),
             detail: resolved.display().to_string(),
             fix: String::new(),
         },
         Err(err) => DoctorCheck {
-            name: "cache_dir".into(),
+            name: name.into(),
             status: "fail".into(),
-            summary: "Cache directory is not writable.".into(),
+            summary: fail_summary.into(),
             detail: err.to_string(),
-            fix: "Set defaults.cache_dir to a writable path.".into(),
+            fix: fix.into(),
         },
     }
 }
@@ -256,9 +263,9 @@ fn roster_diversity(config: &AppConfig) -> DoctorCheck {
     }
 }
 
-pub fn run_doctor(cwd: &Path) -> anyhow::Result<DoctorReport> {
+pub fn run_doctor(cwd: &Path, config_override: Option<&Path>) -> anyhow::Result<DoctorReport> {
     let env = load_local_env(cwd);
-    let (config, config_path) = load_config(cwd, None)?;
+    let (config, config_path) = load_config(cwd, config_override)?;
     let mut checks = Vec::new();
     checks.push(check_python());
     let git = check_git(cwd);
@@ -277,7 +284,22 @@ pub fn run_doctor(cwd: &Path) -> anyhow::Result<DoctorReport> {
     let (repo, base_ref) = repo_checks(cwd, &config.defaults.base_ref, git_ok);
     checks.push(repo);
     checks.push(base_ref);
-    checks.push(cache_check(cwd, &config.defaults.cache_dir));
+    checks.push(writable_dir_check(
+        cwd,
+        &config.defaults.cache_dir,
+        "cache_dir",
+        "Cache directory is writable.",
+        "Cache directory is not writable.",
+        "Set defaults.cache_dir to a writable path.",
+    ));
+    checks.push(writable_dir_check(
+        cwd,
+        &config.defaults.run_dir,
+        "run_dir",
+        "Run artifact directory is writable.",
+        "Run artifact directory is not writable.",
+        "Set defaults.run_dir to a writable path.",
+    ));
     checks.extend(provider_checks(&config, &env));
     checks.push(roster_diversity(&config));
     let ok = checks.iter().all(|c| c.status != "fail");

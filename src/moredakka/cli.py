@@ -114,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except RuntimeError as exc:
         message = str(exc).strip() or "command failed"
+        run_artifact_path = getattr(exc, "run_artifact_path", None)
         hint = None
         if "base ref" in message:
             hint = "run `moredakka doctor` or pass `--base-ref <existing-ref>`"
@@ -121,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
             hint = "set the missing environment variable in your shell or repo-local .env, then rerun `moredakka doctor`"
         elif "Config" in message or "config" in message:
             hint = "fix moredakka.toml or pass `--config <valid-path>`"
+        if run_artifact_path:
+            hint = (hint + "; " if hint else "") + f"inspect run artifact at {run_artifact_path}"
         return _emit_cli_error(message, hint=hint)
 
     run_artifact = getattr(result, "run_artifact", None)

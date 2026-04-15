@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Iterable, Mapping
 
@@ -64,6 +65,24 @@ def sha256_json(payload: object) -> str:
 
 def ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def write_text_atomic(path: Path, content: str, *, encoding: str = "utf-8") -> Path:
+    ensure_dir(path.parent)
+    fd, tmp_path = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
     return path
 
 
