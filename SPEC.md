@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`moredakka` exists to increase the amount of disciplined cognition applied to the user’s current software task without requiring them to manually restage the same context for multiple models.
+`moredakka` exists to increase the amount of disciplined cognition applied to the user’s current problem without requiring them to manually restage the same context for multiple models.
 
 The CLI should feel like this:
 
@@ -11,18 +11,18 @@ The CLI should feel like this:
 ## Non-goals
 
 - Not a general chat wrapper.
-- Not a full autonomous coding agent.
-- Not a repo-wide search engine.
 - Not an unbounded model swarm.
-- Not a replacement for tests, code review, or deployment safety controls.
+- Not hidden autonomy masquerading as structure.
+- Not a repo-wide search engine.
+- Not a replacement for domain-specific safety controls, verification, or execution discipline.
 
 ## Core invariants
 
-1. **Context is local before it is broad.** Start with the working surface: diff, branch, docs near the work.
+1. **Context is local before it is broad.** Start with the current problem surface and nearby evidence.
 2. **Each model call has a distinct job.** No duplicate vague prompts across providers.
 3. **All outputs are typed.** Every role returns strict JSON.
 4. **The loop is bounded.** Default 2 rounds. Hard stop on low novelty.
-5. **Diffs beat file dumps.** Ship the delta first.
+5. **Deltas beat dumps.** Prioritize the most decision-relevant local change or evidence first.
 6. **Disagreement is preserved.** Do not over-smooth conflicting views away.
 7. **Synthesis must collapse to one recommended path.** The user gets a move, not a committee transcript.
 
@@ -35,6 +35,7 @@ Fast default entrypoint. Equivalent to `plan` with inferred objective.
 Use when:
 - the user is already in a repo and wants “what next here?”
 - the objective is implicit in the current work surface
+- the user wants to steer the run with free directive prose via `--ask`, which the compiler should translate into bounded canonical operations
 
 ### `moredakka plan`
 
@@ -71,9 +72,13 @@ Print only the context packet. Useful for debugging context quality and budget a
 
 ## Context packet
 
-The context packet is the entire leverage point. It should be compact, specific, and heavily biased toward what changed.
+The context packet is the entire leverage point. It should be compact, specific, and heavily biased toward the most decision-relevant local evidence.
+
+Today the strongest built-in surface is repo/code work. That is an adapter choice, not the product ontology.
 
 ### Inputs
+
+The engine should support multiple surface adapters over time. For the current repo/code adapter, inputs are:
 
 - current working directory
 - git root
@@ -119,9 +124,9 @@ Job:
 ### Implementer
 
 Job:
-- turn the situation into concrete edits
-- propose smallest viable code moves
-- name files and commands
+- turn the situation into concrete actions
+- propose the smallest viable move that materially advances the objective
+- name domain-specific artifacts, files, commands, or other levers only when the current surface supports them
 
 ### Breaker
 
@@ -177,6 +182,8 @@ The current implementation computes novelty from normalized titles of problems, 
 
 ## Output schema
 
+The current concrete schema is still software-heavy and will be generalized in follow-on tranches. The stable requirement is that synthesis produces a typed chosen path, top problems, next actions, risks, disagreements, stop conditions, and confidence, with domain-specific artifacts included when relevant.
+
 The synthesis report must produce:
 
 - `inferred_objective`
@@ -194,10 +201,21 @@ The synthesis report must produce:
 - `confidence`
 - `confidence_rationale`
 
+Optional synthesis artifacts may also be attached when the compiled plan requires them:
+- `operator_summary`
+- `status_ledger`
+- `intent_card`
+- `handoff_paragraph`
+
 The final user-visible report should also surface invocation provenance:
 - invocation id
 - run artifact path
 - stop reason
+- query compilation summary:
+  - directive prose
+  - candidate operations
+  - selected operations
+  - compiled plan
 - usage / cost summary
 - context rendering / truncation summary
 

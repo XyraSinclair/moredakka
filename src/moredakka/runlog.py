@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 from moredakka.config import AppConfig, ProviderConfig, _find_config_path
 from moredakka.context import ContextPacket
+from moredakka.problem_surface import ProblemSurface, artifact_count, excerpt_char_count
 from moredakka.util import ensure_dir, run_command, sha256_json, write_text_atomic
 
 
@@ -77,6 +78,29 @@ def write_run_artifact(*, cwd: Path, run_dir: str, invocation_id: str, artifact:
     path = dated / f"{invocation_id}.json"
     write_text_atomic(path, json.dumps(to_jsonable(dict(artifact)), indent=2, ensure_ascii=False) + "\n")
     return path
+
+
+def latest_run_artifact_summary(*, cwd: Path, run_dir: str) -> dict[str, Any] | None:
+    root = resolved_run_dir(cwd, run_dir)
+    if not root.exists():
+        return None
+    paths = sorted(root.rglob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    for path in paths:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        invocation = payload.get("invocation", {}) or {}
+        query = payload.get("query_compilation", {}) or {}
+        return {
+            "path": str(path),
+            "run_status": invocation.get("run_status"),
+            "stop_reason": invocation.get("stop_reason"),
+            "mode": invocation.get("mode"),
+            "directive": invocation.get("directive"),
+            "selected_ops": query.get("selected_ops", []) or [],
+        }
+    return None
 
 
 def to_jsonable(value: Any) -> Any:
@@ -238,7 +262,20 @@ def accumulate_usage(items: list[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
-def context_rendering_stats(packet: ContextPacket, rendered_text: str, *, char_budget: int) -> dict[str, Any]:
+def context_rendering_stats(packet: ContextPacket | ProblemSurface, rendered_text: str, *, char_budget: int) -> dict[str, Any]:
+    if isinstance(packet, ProblemSurface):
+        original_chars = excerpt_char_count(packet)
+        return {
+            "char_budget": char_budget,
+            "rendered_chars": len(rendered_text),
+            "source_excerpt_chars": original_chars,
+            "truncated": len(rendered_text) >= char_budget and original_chars > len(rendered_text),
+            "artifact_count": artifact_count(packet),
+            "event_count": len(packet.events),
+            "doc_count": artifact_count(packet, kind="doc"),
+            "file_excerpt_count": artifact_count(packet, kind="file_excerpt"),
+            "changed_file_count": len(packet.changed_files),
+        }
     sections = [
         packet.diff_excerpt,
         packet.diff_stats,

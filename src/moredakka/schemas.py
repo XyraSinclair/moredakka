@@ -6,10 +6,17 @@ from typing import Any
 
 ROLE_ANALYSIS_SCHEMA_NAME = "moredakka_role_analysis"
 SYNTHESIS_SCHEMA_NAME = "moredakka_synthesis"
+SUPPORTED_SCHEMA_PROFILES = {"software", "generic"}
 
 
 def _string_array_schema() -> dict[str, Any]:
     return {"type": "array", "items": {"type": "string"}}
+
+
+def _nullable(schema: dict[str, Any]) -> dict[str, Any]:
+    copied = deepcopy(schema)
+    copied["type"] = [copied["type"], "null"] if isinstance(copied.get("type"), str) else [*copied.get("type", []), "null"]
+    return copied
 
 
 def _issue_schema() -> dict[str, Any]:
@@ -39,29 +46,37 @@ def _candidate_path_schema() -> dict[str, Any]:
     }
 
 
-def _step_schema() -> dict[str, Any]:
+def _action_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
             "title": {"type": "string"},
             "why": {"type": "string"},
-            "files": _string_array_schema(),
+            "artifacts": _string_array_schema(),
             "commands": _string_array_schema(),
             "acceptance": _string_array_schema(),
             "effort": {"type": "string", "enum": ["small", "medium", "large"]},
             "priority": {"type": "integer", "minimum": 1, "maximum": 10},
         },
-        "required": ["title", "why", "files", "commands", "acceptance", "effort", "priority"],
+        "required": ["title", "why", "artifacts", "commands", "acceptance", "effort", "priority"],
         "additionalProperties": False,
     }
 
 
-def _test_schema() -> dict[str, Any]:
+def _software_step_schema() -> dict[str, Any]:
+    schema = _action_schema()
+    schema["properties"]["files"] = _string_array_schema()
+    schema["required"] = ["title", "why", "files", "commands", "acceptance", "effort", "priority"]
+    del schema["properties"]["artifacts"]
+    return schema
+
+
+def _validation_check_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
             "name": {"type": "string"},
-            "kind": {"type": "string", "enum": ["unit", "integration", "e2e", "manual", "static"]},
+            "kind": {"type": "string", "enum": ["unit", "integration", "e2e", "manual", "static", "reasoning", "simulation", "checklist"]},
             "command": {"type": "string"},
             "purpose": {"type": "string"},
         },
@@ -124,91 +139,124 @@ def _disagreement_schema() -> dict[str, Any]:
     }
 
 
-def role_analysis_schema() -> dict[str, Any]:
+def _status_ledger_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "role": {"type": "string"},
-            "focus": {"type": "string"},
-            "one_sentence_take": {"type": "string"},
-            "top_problems": {"type": "array", "items": _issue_schema()},
-            "candidate_paths": {"type": "array", "items": _candidate_path_schema()},
-            "recommended_steps": {"type": "array", "items": _step_schema()},
-            "tests": {"type": "array", "items": _test_schema()},
-            "risks": {"type": "array", "items": _risk_schema()},
-            "edits": {"type": "array", "items": _edit_schema()},
-            "assumptions": _string_array_schema(),
-            "questions": _string_array_schema(),
-            "stop_conditions": _string_array_schema(),
-            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "done": _string_array_schema(),
+            "remaining": _string_array_schema(),
+            "blocked": _string_array_schema(),
+            "next": _string_array_schema(),
         },
-        "required": [
-            "role",
-            "focus",
-            "one_sentence_take",
-            "top_problems",
-            "candidate_paths",
-            "recommended_steps",
-            "tests",
-            "risks",
-            "edits",
-            "assumptions",
-            "questions",
-            "stop_conditions",
-            "confidence",
-        ],
+        "required": ["done", "remaining", "blocked", "next"],
         "additionalProperties": False,
     }
 
 
-def synthesis_schema() -> dict[str, Any]:
+def _intent_card_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "inferred_objective": {"type": "string"},
-            "one_sentence_take": {"type": "string"},
-            "selected_path": _candidate_path_schema(),
-            "top_problems": {"type": "array", "items": _issue_schema()},
-            "next_actions": {"type": "array", "items": _step_schema()},
-            "commit_plan": {"type": "array", "items": _commit_schema()},
-            "tests": {"type": "array", "items": _test_schema()},
-            "edit_targets": {"type": "array", "items": _edit_schema()},
-            "major_risks": {"type": "array", "items": _risk_schema()},
-            "disagreements": {"type": "array", "items": _disagreement_schema()},
-            "stop_conditions": _string_array_schema(),
+            "goal": {"type": "string"},
+            "selected_path": {"type": "string"},
             "open_questions": _string_array_schema(),
-            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-            "confidence_rationale": {"type": "string"},
         },
-        "required": [
-            "inferred_objective",
-            "one_sentence_take",
-            "selected_path",
-            "top_problems",
-            "next_actions",
-            "commit_plan",
-            "tests",
-            "edit_targets",
-            "major_risks",
-            "disagreements",
-            "stop_conditions",
-            "open_questions",
-            "confidence",
-            "confidence_rationale",
-        ],
+        "required": ["goal", "selected_path", "open_questions"],
         "additionalProperties": False,
     }
 
 
-def minimal_shape_ok(payload: dict[str, Any], *, synthesis: bool = False) -> bool:
-    schema = synthesis_schema() if synthesis else role_analysis_schema()
+def _common_role_properties(action_key: str, validation_key: str, action_schema: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "role": {"type": "string"},
+        "focus": {"type": "string"},
+        "one_sentence_take": {"type": "string"},
+        "observations": _string_array_schema(),
+        "top_problems": {"type": "array", "items": _issue_schema()},
+        "candidate_paths": {"type": "array", "items": _candidate_path_schema()},
+        action_key: {"type": "array", "items": action_schema},
+        validation_key: {"type": "array", "items": _validation_check_schema()},
+        "risks": {"type": "array", "items": _risk_schema()},
+        "assumptions": _string_array_schema(),
+        "questions": _string_array_schema(),
+        "stop_conditions": _string_array_schema(),
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    }
+
+
+def role_analysis_schema(profile: str = "software") -> dict[str, Any]:
+    if profile == "software":
+        properties = _common_role_properties("recommended_steps", "tests", _software_step_schema())
+        properties["edits"] = {"type": "array", "items": _edit_schema()}
+        required = list(properties.keys())
+    elif profile == "generic":
+        properties = _common_role_properties("recommended_actions", "validation_checks", _action_schema())
+        required = list(properties.keys())
+    else:
+        raise KeyError(profile)
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
+def _common_synthesis_properties(action_key: str, validation_key: str, action_schema: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "inferred_objective": {"type": "string"},
+        "one_sentence_take": {"type": "string"},
+        "selected_path": _candidate_path_schema(),
+        "top_problems": {"type": "array", "items": _issue_schema()},
+        action_key: {"type": "array", "items": action_schema},
+        validation_key: {"type": "array", "items": _validation_check_schema()},
+        "major_risks": {"type": "array", "items": _risk_schema()},
+        "disagreements": {"type": "array", "items": _disagreement_schema()},
+        "stop_conditions": _string_array_schema(),
+        "open_questions": _string_array_schema(),
+        "operator_summary": _nullable({"type": "string"}),
+        "handoff_paragraph": _nullable({"type": "string"}),
+        "status_ledger": _nullable(_status_ledger_schema()),
+        "intent_card": _nullable(_intent_card_schema()),
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "confidence_rationale": {"type": "string"},
+    }
+
+
+def synthesis_schema(profile: str = "software") -> dict[str, Any]:
+    if profile == "software":
+        properties = _common_synthesis_properties("next_actions", "tests", _software_step_schema())
+        properties["commit_plan"] = {"type": "array", "items": _commit_schema()}
+        properties["edit_targets"] = {"type": "array", "items": _edit_schema()}
+        required = list(properties.keys())
+    elif profile == "generic":
+        properties = _common_synthesis_properties("next_actions", "validation_checks", _action_schema())
+        required = list(properties.keys())
+    else:
+        raise KeyError(profile)
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
+def minimal_shape_ok(payload: dict[str, Any], *, synthesis: bool = False, profile: str = "software") -> bool:
+    schema = synthesis_schema(profile) if synthesis else role_analysis_schema(profile)
     required = schema["required"]
     return isinstance(payload, dict) and all(key in payload for key in required)
 
 
-def schema_copy(name: str) -> dict[str, Any]:
+def schema_copy(name: str, profile: str = "software") -> dict[str, Any]:
     if name == ROLE_ANALYSIS_SCHEMA_NAME:
-        return deepcopy(role_analysis_schema())
+        return deepcopy(role_analysis_schema(profile))
     if name == SYNTHESIS_SCHEMA_NAME:
-        return deepcopy(synthesis_schema())
+        return deepcopy(synthesis_schema(profile))
     raise KeyError(name)
+
+
+def schema_name_for_profile(name: str, profile: str) -> str:
+    if profile not in SUPPORTED_SCHEMA_PROFILES:
+        raise KeyError(profile)
+    return f"{name}_{profile}"

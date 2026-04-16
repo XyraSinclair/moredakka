@@ -11,15 +11,26 @@ from typing import Any
 from moredakka.config import AppConfig, _default_config, load_config
 from moredakka.context import ContextPacket, build_context_packet, render_context_packet
 from moredakka.errors import MoreDakkaRuntimeError
+from moredakka.problem_surface import ProblemSurface
 from moredakka.providers import build_provider
 from moredakka.providers.base import ProviderResult
+from moredakka.query_language import (
+    compile_query_plan,
+    render_candidate_operations,
+    render_query_plan_summary,
+    render_selected_ops,
+)
+from moredakka.query_plan import QueryPlan
 from moredakka.roles import ROLE_SPECS, default_role_sequence, load_prompt, mode_instruction
+from moredakka.surface_registry import resolve_surface_adapter
+from moredakka.surfaces.repo import problem_surface_from_context_packet
 from moredakka.runlog import (
     accumulate_usage,
     config_metadata,
     context_rendering_stats,
     estimate_cost_usd,
     isoformat_z,
+    latest_run_artifact_summary,
     make_invocation_id,
     preflight_run_dir,
     normalize_usage,
@@ -33,6 +44,7 @@ from moredakka.schemas import (
     SYNTHESIS_SCHEMA_NAME,
     minimal_shape_ok,
     role_analysis_schema,
+    schema_name_for_profile,
     synthesis_schema,
 )
 from moredakka.util import ensure_dir, flatten_strings, normalize_phrase, sha256_json, write_text_atomic
@@ -41,6 +53,7 @@ from moredakka.util import ensure_dir, flatten_strings, normalize_phrase, sha256
 @dataclass
 class WorkflowResult:
     packet: ContextPacket
+    surface: ProblemSurface
     rounds: list[list[dict[str, Any]]]
     synthesis: dict[str, Any]
     provider_notes: list[str]
@@ -85,7 +98,7 @@ class CallTrace:
 
 def _global_system_prompt() -> str:
     return (
-        "You are one role inside moredakka, a bounded multi-model plan-improvement loop for live software work. "
+        "You are one role inside moredakka, a bounded multi-model plan-improvement loop for live problem solving. "
         "Use only the provided context. Prefer operational clarity over ornament. Surface uncertainty explicitly. "
         "Return strictly valid JSON matching the supplied schema. Do not wrap JSON in markdown."
     )
@@ -99,6 +112,9 @@ def _role_user_prompt(
     context_text: str,
     round_index: int,
     peer_summaries: str = "",
+    directive: str = "",
+    query_plan_summary: str = "",
+    selected_ops_text: str = "",
 ) -> str:
     role_prompt = load_prompt(role_name)
     pieces = [
@@ -108,6 +124,12 @@ def _role_user_prompt(
         f"MODE BIAS\n{mode_instruction(mode)}",
         f"ROLE MANDATE\n{role_prompt}",
     ]
+    if directive:
+        pieces.append(f"DIRECTIVE PROSE\n{directive}")
+    if selected_ops_text:
+        pieces.append(f"SELECTED OPERATIONS\n{selected_ops_text}")
+    if query_plan_summary:
+        pieces.append(f"COMPILED PLAN\n{query_plan_summary}")
     if round_index > 1:
         pieces.append(
             "ROUND RULE\n"
@@ -126,18 +148,43 @@ def _synthesis_prompt(
     objective: str,
     context_text: str,
     round_summaries: str,
+    directive: str = "",
+    query_plan_summary: str = "",
+    selected_ops_text: str = "",
+    final_artifact_text: str = "",
 ) -> str:
     synth_prompt = load_prompt("synthesizer")
-    return "\n\n".join(
-        [
-            f"MODE\n{mode}",
-            f"OBJECTIVE\n{objective}",
-            f"MODE BIAS\n{mode_instruction(mode)}",
-            f"SYNTHESIS MANDATE\n{synth_prompt}",
-            f"ROLE OUTPUTS\n{round_summaries}",
-            f"LOCAL CONTEXT\n{context_text}",
-        ]
-    )
+    pieces = [
+        f"MODE\n{mode}",
+        f"OBJECTIVE\n{objective}",
+        f"MODE BIAS\n{mode_instruction(mode)}",
+        f"SYNTHESIS MANDATE\n{synth_prompt}",
+    ]
+    if directive:
+        pieces.append(f"DIRECTIVE PROSE\n{directive}")
+    if selected_ops_text:
+        pieces.append(f"SELECTED OPERATIONS\n{selected_ops_text}")
+    if query_plan_summary:
+        pieces.append(f"COMPILED PLAN\n{query_plan_summary}")
+    if final_artifact_text:
+        pieces.append(f"FINAL ARTIFACT OBLIGATIONS\n{final_artifact_text}")
+    pieces.extend([
+        f"ROLE OUTPUTS\n{round_summaries}",
+        f"LOCAL CONTEXT\n{context_text}",
+    ])
+    return "\n\n".join(pieces)
+
+
+def _action_items(payload: dict[str, Any], *, synthesis: bool = False) -> list[dict[str, Any]]:
+    if synthesis:
+        return (payload.get("next_actions") or payload.get("recommended_actions") or [])[:]
+    return (payload.get("recommended_steps") or payload.get("recommended_actions") or [])[:]
+
+
+def _validation_items(payload: dict[str, Any], *, synthesis: bool = False) -> list[dict[str, Any]]:
+    if synthesis:
+        return (payload.get("tests") or payload.get("validation_checks") or [])[:]
+    return (payload.get("tests") or payload.get("validation_checks") or [])[:]
 
 
 def _summarize_role_outputs(outputs: list[dict[str, Any]]) -> str:
@@ -151,8 +198,8 @@ def _summarize_role_outputs(outputs: list[dict[str, Any]]) -> str:
                     f"TAKE: {item.get('one_sentence_take', '')}",
                     "TOP_PROBLEMS:",
                     *(f"- {problem.get('title', '')}: {problem.get('detail', '')}" for problem in item.get("top_problems", [])[:3]),
-                    "RECOMMENDED_STEPS:",
-                    *(f"- {step.get('title', '')}: {step.get('why', '')}" for step in item.get("recommended_steps", [])[:4]),
+                    "RECOMMENDED_ACTIONS:",
+                    *(f"- {step.get('title', '')}: {step.get('why', '')}" for step in _action_items(item)[:4]),
                     "RISKS:",
                     *(f"- {risk.get('name', '')}: {risk.get('mitigation', '')}" for risk in item.get("risks", [])[:3]),
                 ]
@@ -167,10 +214,11 @@ def _salient_items(outputs: list[dict[str, Any]]) -> set[str]:
         for text in flatten_strings(
             [
                 output.get("one_sentence_take", ""),
+                output.get("observations", []),
                 [problem.get("title", "") for problem in output.get("top_problems", [])],
-                [step.get("title", "") for step in output.get("recommended_steps", [])],
+                [step.get("title", "") for step in _action_items(output)],
                 [risk.get("name", "") for risk in output.get("risks", [])],
-                [test.get("name", "") for test in output.get("tests", [])],
+                [test.get("name", "") for test in _validation_items(output)],
             ]
         ):
             norm = normalize_phrase(text)
@@ -317,18 +365,24 @@ def _budget_exceeded(config: AppConfig, usage_totals: dict[str, Any], elapsed_se
     return None
 
 
-def _fallback_synthesis(packet: ContextPacket | None, round_outputs: list[list[dict[str, Any]]], *, stop_reason: str) -> dict[str, Any]:
+def _fallback_synthesis(
+    packet: ContextPacket | None,
+    round_outputs: list[list[dict[str, Any]]],
+    *,
+    stop_reason: str,
+    schema_profile: str,
+) -> dict[str, Any]:
     latest_round = round_outputs[-1] if round_outputs else []
     latest_take = next((item.get("one_sentence_take", "") for item in latest_round if item.get("one_sentence_take")), "")
     latest_problems = []
-    latest_tests = []
+    latest_validation = []
     latest_risks = []
     for item in latest_round:
         latest_problems.extend(item.get("top_problems", [])[:2])
-        latest_tests.extend(item.get("tests", [])[:2])
+        latest_validation.extend(_validation_items(item)[:2])
         latest_risks.extend(item.get("risks", [])[:2])
     objective = packet.inferred_objective if packet else ""
-    return {
+    payload = {
         "inferred_objective": objective,
         "one_sentence_take": latest_take or f"Stopped after bounded evidence collection due to {stop_reason}.",
         "selected_path": {
@@ -338,16 +392,114 @@ def _fallback_synthesis(packet: ContextPacket | None, round_outputs: list[list[d
         },
         "top_problems": latest_problems,
         "next_actions": [],
-        "commit_plan": [],
-        "tests": latest_tests,
-        "edit_targets": [],
         "major_risks": latest_risks,
         "disagreements": [],
         "stop_conditions": [f"Stopped because {stop_reason} was reached."],
         "open_questions": [],
+        "operator_summary": None,
+        "handoff_paragraph": None,
+        "status_ledger": None,
+        "intent_card": None,
         "confidence": 0.25,
         "confidence_rationale": f"Fallback synthesis because {stop_reason} prevented another model call.",
     }
+    if schema_profile == "software":
+        payload["commit_plan"] = []
+        payload["tests"] = latest_validation
+        payload["edit_targets"] = []
+    else:
+        payload["validation_checks"] = latest_validation
+    return payload
+
+
+def _artifact_lines(items: list[str]) -> str:
+    return "\n".join(items) if items else "(none)"
+
+
+def _query_compilation_payload(plan: QueryPlan, *, schema_profile: str) -> dict[str, Any]:
+    return {
+        "directive": plan.directive,
+        "selected_ops": plan.selected_ops,
+        "candidate_operations": [
+            {
+                "canonical_op": item.canonical_op,
+                "score": round(item.score, 3),
+                "evidence": item.evidence,
+                "rationale": item.rationale,
+                "status": item.status,
+            }
+            for item in plan.candidate_operations
+        ],
+        "query_plan": to_jsonable(
+            {
+                "mode": plan.mode,
+                "schema_profile": schema_profile,
+                "objective_strategy": plan.objective_strategy,
+                "context_policy": plan.context_policy,
+                "role_plan": plan.role_plan,
+                "synthesis_policy": plan.synthesis_policy,
+                "final_artifacts": plan.final_artifacts,
+                "stop_policy": plan.stop_policy,
+                "context_signals": plan.context_signals,
+                "notes": plan.notes,
+            }
+        ),
+    }
+
+
+def _augment_synthesis_artifacts(
+    synthesis: dict[str, Any],
+    *,
+    plan: QueryPlan,
+    rounds: list[list[dict[str, Any]]],
+    stop_reason: str,
+) -> dict[str, Any]:
+    updated = dict(synthesis)
+    selected_path = updated.get("selected_path", {}) or {}
+    next_actions = updated.get("next_actions", []) or []
+    next_titles = [item.get("title", "") for item in next_actions if item.get("title")]
+
+    allowed = set(plan.final_artifacts)
+    if "operator_summary" not in allowed:
+        updated["operator_summary"] = None
+    if "status_ledger" not in allowed:
+        updated["status_ledger"] = None
+    if "intent_card" not in allowed:
+        updated["intent_card"] = None
+    if "handoff_paragraph" not in allowed:
+        updated["handoff_paragraph"] = None
+
+    if "operator_summary" in plan.final_artifacts and not updated.get("operator_summary"):
+        summary_parts = [updated.get("one_sentence_take", "").strip()]
+        if selected_path.get("name"):
+            summary_parts.append(f"Path: {selected_path.get('name')}.")
+        if next_titles:
+            summary_parts.append("Next: " + "; ".join(next_titles[:2]) + ".")
+        updated["operator_summary"] = " ".join(part for part in summary_parts if part).strip()
+
+    if "status_ledger" in plan.final_artifacts and not updated.get("status_ledger"):
+        updated["status_ledger"] = {
+            "done": [f"Collected {len(rounds)} bounded role round(s)."] if rounds else [],
+            "remaining": next_titles[:3] or ["Review selected path and execute the highest-leverage next step."],
+            "blocked": [f"Stopped because {stop_reason}."] if stop_reason in {"max_total_tokens", "max_cost_usd", "max_wall_seconds", "error"} else [],
+            "next": next_titles[:2] or [selected_path.get("summary", "Proceed with the selected path.")],
+        }
+
+    if "intent_card" in plan.final_artifacts and not updated.get("intent_card"):
+        updated["intent_card"] = {
+            "goal": updated.get("inferred_objective", ""),
+            "selected_path": selected_path.get("name", ""),
+            "open_questions": updated.get("open_questions", []) or [],
+        }
+
+    if "handoff_paragraph" in plan.final_artifacts and not updated.get("handoff_paragraph"):
+        updated["handoff_paragraph"] = (
+            f"Continue from the current state. Objective: {updated.get('inferred_objective', '')}. "
+            f"Selected path: {selected_path.get('name', '')} — {selected_path.get('summary', '')}. "
+            f"Next actions: {'; '.join(next_titles[:3]) if next_titles else 'inspect the latest report and execute the highest-leverage safe next step.'}"
+        ).strip()
+
+    return updated
 
 
 def _run_artifact_payload(
@@ -360,10 +512,14 @@ def _run_artifact_payload(
     config: AppConfig,
     config_info: dict[str, Any],
     packet: ContextPacket | None,
+    surface: ProblemSurface | None,
     context_text: str,
     context_stats: dict[str, Any] | None,
     mode: str,
     explicit_objective: str | None,
+    directive: str | None,
+    query_plan: QueryPlan,
+    schema_profile: str,
     rounds_requested: int,
     rounds_completed: int,
     provider_notes: list[str],
@@ -385,6 +541,7 @@ def _run_artifact_payload(
             "duration_ms": int((ended_at - started_at).total_seconds() * 1000),
             "mode": mode,
             "explicit_objective": explicit_objective,
+            "directive": directive,
             "inferred_objective": packet.inferred_objective if packet else "",
             "rounds_requested": rounds_requested,
             "rounds_completed": rounds_completed,
@@ -399,8 +556,10 @@ def _run_artifact_payload(
         "repo": repo_info,
         "config": config_info,
         "context_packet": packet.to_dict() if packet else None,
+        "problem_surface": surface.to_dict() if surface else None,
         "context_rendering": context_stats,
         "context_text": context_text,
+        "query_compilation": _query_compilation_payload(query_plan, schema_profile=schema_profile),
         "provider_roster": provider_notes,
         "usage_totals": usage_totals,
         "role_calls": [trace.to_dict() for trace in role_traces],
@@ -416,7 +575,10 @@ def run_workflow(
     cwd: Path,
     mode: str,
     objective: str | None,
+    directive: str | None = None,
     config_path: str | None = None,
+    surface_name: str | None = None,
+    schema_profile: str | None = None,
     base_ref: str | None = None,
     rounds: int | None = None,
     char_budget: int | None = None,
@@ -427,6 +589,7 @@ def run_workflow(
     config = _default_config()
     config_info = config_metadata(config, cwd=cwd, explicit_config_path=None)
     packet: ContextPacket | None = None
+    surface: ProblemSurface | None = None
     context_text = ""
     context_stats: dict[str, Any] | None = None
     providers: dict[str, Any] = {}
@@ -439,31 +602,63 @@ def run_workflow(
     run_status = "success"
     artifact_path: str | None = None
     deduped_notes: list[str] = []
+    query_plan = compile_query_plan(mode=mode, directive=directive, base_role_names=default_role_sequence(mode))
 
     try:
         config = load_config(cwd=cwd, explicit_path=config_path)
         config_info = config_metadata(config, cwd=cwd, explicit_config_path=config_path)
+        resolved_surface_name = surface_name or config.defaults.surface
         base_ref = base_ref or config.defaults.base_ref
         rounds = rounds or config.defaults.max_rounds
         char_budget = char_budget or config.defaults.char_budget
+        resolved_schema_profile = schema_profile or config.defaults.schema_profile
+        if resolved_schema_profile == "auto":
+            resolved_schema_profile = "software" if resolved_surface_name == "repo" else "generic"
+
+        recent_run_summary = latest_run_artifact_summary(cwd=cwd, run_dir=config.defaults.run_dir)
+        has_recent_run_artifact = recent_run_summary is not None
         preflight_run_dir(cwd=cwd, run_dir=config.defaults.run_dir)
 
-        packet = build_context_packet(
-            cwd=cwd,
+        if resolved_surface_name == "repo":
+            packet = build_context_packet(
+                cwd=cwd,
+                mode=mode,
+                objective=objective,
+                base_ref=base_ref,
+                char_budget=char_budget,
+            )
+            surface = problem_surface_from_context_packet(packet)
+            context_text = render_context_packet(packet, char_budget=char_budget)
+            context_stats = context_rendering_stats(surface, context_text, char_budget=char_budget)
+        else:
+            surface_adapter = resolve_surface_adapter(resolved_surface_name)
+            surface, packet = surface_adapter.build_surface(
+                cwd=cwd,
+                mode=mode,
+                objective=objective,
+                base_ref=base_ref,
+                char_budget=char_budget,
+            )
+            context_text = surface_adapter.render_surface(packet, char_budget=char_budget)
+            context_stats = context_rendering_stats(surface, context_text, char_budget=char_budget)
+        query_plan = compile_query_plan(
             mode=mode,
-            objective=objective,
-            base_ref=base_ref,
-            char_budget=char_budget,
+            directive=directive,
+            base_role_names=default_role_sequence(mode),
+            packet=packet,
+            has_recent_run_artifact=has_recent_run_artifact,
+            recent_run_summary=recent_run_summary,
         )
-        objective_text = packet.inferred_objective
-        context_text = render_context_packet(packet, char_budget=char_budget)
-        context_stats = context_rendering_stats(packet, context_text, char_budget=char_budget)
+        objective_text = surface.inferred_objective
 
         cache_dir_config = Path(config.defaults.cache_dir).expanduser()
         cache_dir = (cache_dir_config if cache_dir_config.is_absolute() else cwd / cache_dir_config).resolve()
         providers = {name: build_provider(provider_cfg) for name, provider_cfg in config.providers.items()}
-        role_names = default_role_sequence(mode)
+        role_names = [item.role_name for item in query_plan.role_plan if item.role_name in config.roles]
         system = _global_system_prompt()
+        selected_ops_text = render_selected_ops(query_plan)
+        query_plan_summary = render_query_plan_summary(query_plan)
+        final_artifact_text = _artifact_lines(query_plan.final_artifacts)
 
         prior_round_for_novelty: list[dict[str, Any]] | None = None
         peer_summary = ""
@@ -485,6 +680,9 @@ def run_workflow(
                         context_text=context_text,
                         round_index=round_index,
                         peer_summaries=peer_summary,
+                        directive=directive or "",
+                        query_plan_summary=query_plan_summary,
+                        selected_ops_text=selected_ops_text,
                     )
                     prompts_by_role[role_name] = user_prompt
                     prev_id = (
@@ -499,8 +697,8 @@ def run_workflow(
                         cache_dir=cache_dir,
                         system=system,
                         user=user_prompt,
-                        schema_name=ROLE_ANALYSIS_SCHEMA_NAME,
-                        schema=role_analysis_schema(),
+                        schema_name=schema_name_for_profile(ROLE_ANALYSIS_SCHEMA_NAME, resolved_schema_profile),
+                        schema=role_analysis_schema(resolved_schema_profile),
                         previous_response_id=prev_id,
                         use_cache=use_cache,
                     )
@@ -518,12 +716,12 @@ def run_workflow(
                         provider_config=provider_cfg,
                         cached=cached,
                         previous_response_id=previous_by_role[role_name],
-                        schema_name=ROLE_ANALYSIS_SCHEMA_NAME,
+                        schema_name=schema_name_for_profile(ROLE_ANALYSIS_SCHEMA_NAME, resolved_schema_profile),
                         system_prompt=system,
                         user_prompt=prompts_by_role[role_name],
                     )
                     role_traces.append(trace)
-                    if not minimal_shape_ok(cached.result.data, synthesis=False):
+                    if not minimal_shape_ok(cached.result.data, synthesis=False, profile=resolved_schema_profile):
                         raise RuntimeError(
                             f"Provider {cached.result.provider}/{cached.result.model} returned malformed role output for {role_name}."
                         )
@@ -556,7 +754,7 @@ def run_workflow(
 
         synthesis_data: dict[str, Any]
         if stop_reason in {"max_total_tokens", "max_cost_usd", "max_wall_seconds"}:
-            synthesis_data = _fallback_synthesis(packet, all_rounds, stop_reason=stop_reason)
+            synthesis_data = _fallback_synthesis(packet, all_rounds, stop_reason=stop_reason, schema_profile=resolved_schema_profile)
         else:
             synth_provider_name = config.roles["synthesizer"].provider
             synth_provider = providers[synth_provider_name]
@@ -569,14 +767,18 @@ def run_workflow(
                 objective=objective_text,
                 context_text=context_text,
                 round_summaries=round_summaries,
+                directive=directive or "",
+                query_plan_summary=query_plan_summary,
+                selected_ops_text=selected_ops_text,
+                final_artifact_text=final_artifact_text,
             )
             synthesis_cached = _cached_generate(
                 provider=synth_provider,
                 cache_dir=cache_dir,
                 system=system,
                 user=synthesis_prompt,
-                schema_name=SYNTHESIS_SCHEMA_NAME,
-                schema=synthesis_schema(),
+                schema_name=schema_name_for_profile(SYNTHESIS_SCHEMA_NAME, resolved_schema_profile),
+                schema=synthesis_schema(resolved_schema_profile),
                 previous_response_id=None,
                 use_cache=use_cache,
             )
@@ -587,7 +789,7 @@ def run_workflow(
                 provider_config=synth_provider_cfg,
                 cached=synthesis_cached,
                 previous_response_id=None,
-                schema_name=SYNTHESIS_SCHEMA_NAME,
+                schema_name=schema_name_for_profile(SYNTHESIS_SCHEMA_NAME, resolved_schema_profile),
                 system_prompt=system,
                 user_prompt=synthesis_prompt,
             )
@@ -607,6 +809,12 @@ def run_workflow(
                 stop_reason = post_synthesis_budget
                 run_status = "degraded"
 
+        synthesis_data = _augment_synthesis_artifacts(
+            synthesis_data,
+            plan=query_plan,
+            rounds=all_rounds,
+            stop_reason=stop_reason,
+        )
         deduped_notes = list(dict.fromkeys(provider_notes))
         artifact = _run_artifact_payload(
             invocation_id=invocation_id,
@@ -617,10 +825,14 @@ def run_workflow(
             config=config,
             config_info=config_info,
             packet=packet,
+            surface=surface,
             context_text=context_text,
             context_stats=context_stats,
             mode=mode,
             explicit_objective=objective,
+            directive=directive,
+            query_plan=query_plan,
+            schema_profile=resolved_schema_profile,
             rounds_requested=rounds,
             rounds_completed=len(all_rounds),
             provider_notes=deduped_notes,
@@ -641,6 +853,7 @@ def run_workflow(
         )
         return WorkflowResult(
             packet=packet,
+            surface=surface,
             rounds=all_rounds,
             synthesis=synthesis_data,
             provider_notes=deduped_notes,
@@ -658,10 +871,14 @@ def run_workflow(
             config=config,
             config_info=config_info,
             packet=packet,
+            surface=surface,
             context_text=context_text,
             context_stats=context_stats,
             mode=mode,
             explicit_objective=objective,
+            directive=directive,
+            query_plan=query_plan,
+            schema_profile=resolved_schema_profile if 'resolved_schema_profile' in locals() else 'software',
             rounds_requested=rounds or config.defaults.max_rounds,
             rounds_completed=len(all_rounds),
             provider_notes=list(dict.fromkeys(provider_notes)),

@@ -10,19 +10,35 @@ from moredakka.context import build_context_packet
 from moredakka.doctor import render_doctor_json, render_doctor_markdown, run_doctor
 from moredakka.orchestrator import run_workflow
 from moredakka.report import render_json, render_markdown
+from moredakka.surface_registry import resolve_surface_adapter
 from moredakka.util import load_local_env
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="moredakka",
-        description="Run a bounded multi-model plan-improvement loop over the current software work surface.",
+        description="Run a bounded multi-model plan-improvement loop over the current problem surface.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     def add_common(subparser: argparse.ArgumentParser) -> None:
         subparser.add_argument("--objective", type=str, default=None, help="Explicit objective override.")
+        subparser.add_argument(
+            "--ask",
+            "--directive",
+            dest="directive",
+            type=str,
+            default=None,
+            help="Free-prose directive that the query compiler should translate into bounded orchestration operations.",
+        )
         subparser.add_argument("--config", type=str, default=None, help="Path to moredakka.toml")
+        subparser.add_argument("--surface", type=str, default=None, help="Problem surface adapter to use.")
+        subparser.add_argument(
+            "--schema-profile",
+            type=str,
+            default=None,
+            help="Structured output profile to use (auto, software, generic).",
+        )
         subparser.add_argument("--base-ref", type=str, default=None, help="Base ref for review mode.")
         subparser.add_argument("--rounds", type=int, default=None, help="Max role-critique rounds.")
         subparser.add_argument("--char-budget", type=int, default=None, help="Max chars for packed context.")
@@ -55,6 +71,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     pack = subparsers.add_parser("pack", help="Print only the packed local context.")
     pack.add_argument("--objective", type=str, default=None)
+    pack.add_argument("--surface", type=str, default="repo")
     pack.add_argument("--base-ref", type=str, default="main")
     pack.add_argument("--char-budget", type=int, default=24000)
     pack.add_argument("--mode", choices=["plan", "review", "patch", "loop", "here"], default="plan")
@@ -88,14 +105,15 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if report.ok else 1
 
         if args.command == "pack":
-            packet = build_context_packet(
+            surface_adapter = resolve_surface_adapter(args.surface)
+            surface, packet = surface_adapter.build_surface(
                 cwd=cwd,
                 mode=args.mode,
                 objective=args.objective,
                 base_ref=args.base_ref,
                 char_budget=args.char_budget,
             )
-            sys.stdout.write(render_json(packet=packet, synthesis={}, rounds=[], provider_notes=[]))
+            sys.stdout.write(render_json(packet=packet, surface=surface, synthesis={}, rounds=[], provider_notes=[]))
             return 0
 
         mode = "plan" if args.command == "here" else args.command
@@ -106,7 +124,10 @@ def main(argv: list[str] | None = None) -> int:
             cwd=cwd,
             mode=mode,
             objective=args.objective,
+            directive=getattr(args, "directive", None),
             config_path=args.config,
+            surface_name=getattr(args, "surface", None),
+            schema_profile=getattr(args, "schema_profile", None),
             base_ref=args.base_ref,
             rounds=rounds,
             char_budget=args.char_budget,
@@ -129,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
     run_artifact = getattr(result, "run_artifact", None)
     run_artifact_path = getattr(result, "run_artifact_path", None)
     markdown = render_markdown(
-        packet=result.packet,
+        packet=result.surface,
         synthesis=result.synthesis,
         rounds=result.rounds,
         provider_notes=result.provider_notes,
@@ -138,6 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     json_text = render_json(
         packet=result.packet,
+        surface=result.surface,
         synthesis=result.synthesis,
         rounds=result.rounds,
         provider_notes=result.provider_notes,

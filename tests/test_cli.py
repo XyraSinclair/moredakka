@@ -103,9 +103,12 @@ class CliTests(unittest.TestCase):
     ) -> None:
         mock_run_workflow.return_value = SimpleNamespace(
             packet=SimpleNamespace(),
+            surface=SimpleNamespace(),
             synthesis={},
             rounds=[],
             provider_notes=[],
+            run_artifact=None,
+            run_artifact_path=None,
         )
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -125,6 +128,43 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(mock_run_workflow.call_args.kwargs["rounds"], 1)
+
+    @patch("moredakka.cli.render_json", return_value='{"ok": true}\n')
+    @patch("moredakka.cli.render_markdown", return_value="# report\n")
+    @patch("moredakka.cli.run_workflow")
+    def test_here_passes_free_prose_directive(
+        self,
+        mock_run_workflow: SimpleNamespace,
+        _mock_render_markdown: SimpleNamespace,
+        _mock_render_json: SimpleNamespace,
+    ) -> None:
+        mock_run_workflow.return_value = SimpleNamespace(
+            packet=SimpleNamespace(),
+            surface=SimpleNamespace(),
+            synthesis={},
+            rounds=[],
+            provider_notes=[],
+            run_artifact=None,
+            run_artifact_path=None,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+
+            buffer = io.StringIO()
+            previous_cwd = Path.cwd()
+            try:
+                import os
+
+                os.chdir(root)
+                with redirect_stdout(buffer):
+                    exit_code = main(["here", "--ask", "be critical and keep it tight"])
+            finally:
+                os.chdir(previous_cwd)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(mock_run_workflow.call_args.kwargs["directive"], "be critical and keep it tight")
 
 
 if __name__ == "__main__":

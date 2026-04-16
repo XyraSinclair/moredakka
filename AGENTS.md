@@ -1,20 +1,20 @@
 # AGENTS.md
 
-This repo builds `moredakka`, a bounded multi-model CLI for sharpening the next move on live software work.
+This repo builds `moredakka`, a bounded multi-model CLI for sharpening the next move on live problems. Repo/code work is one strong current specialization path, not the full product identity.
 
 ## Product intent
 
 `moredakka` is for this narrow job:
-- inspect the current work surface
+- inspect the current problem surface
 - build a tight local context packet
 - run differentiated model roles
 - emit one disciplined next move
 
 It is not:
 - an open-ended chat wrapper
-- a general autonomous coding agent
+- an unbounded autonomous swarm
 - a repo-wide semantic search engine
-- a CI replacement
+- a generic execution engine that hides its own reasoning structure
 
 Keep the product narrow. Resist feature creep that turns it into generic orchestration pageantry.
 

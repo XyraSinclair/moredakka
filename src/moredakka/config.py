@@ -29,6 +29,8 @@ class RoleConfig:
 @dataclass
 class DefaultsConfig:
     mode: str = "plan"
+    surface: str = "repo"
+    schema_profile: str = "auto"
     max_rounds: int = 2
     base_ref: str = "main"
     char_budget: int = 24000
@@ -49,6 +51,8 @@ class AppConfig:
 
 SUPPORTED_PROVIDER_KINDS = {"openai", "gemini", "openrouter"}
 SUPPORTED_MODES = {"plan", "here", "review", "patch", "loop"}
+SUPPORTED_SURFACES = {"repo"}
+SUPPORTED_SCHEMA_PROFILES = {"auto", "software", "generic"}
 REQUIRED_ROLE_NAMES = {"planner", "implementer", "breaker", "minimalist", "synthesizer"}
 SUPPORTED_REASONING_EFFORTS = {"low", "medium", "high"}
 
@@ -137,6 +141,15 @@ def _validate_config(cfg: AppConfig) -> AppConfig:
     if cfg.defaults.mode not in SUPPORTED_MODES:
         raise RuntimeError(
             f"Unsupported default mode: {cfg.defaults.mode}. Supported modes: {', '.join(sorted(SUPPORTED_MODES))}"
+        )
+    if cfg.defaults.surface not in SUPPORTED_SURFACES:
+        raise RuntimeError(
+            f"Unsupported default surface: {cfg.defaults.surface}. Supported surfaces: {', '.join(sorted(SUPPORTED_SURFACES))}"
+        )
+    if cfg.defaults.schema_profile not in SUPPORTED_SCHEMA_PROFILES:
+        raise RuntimeError(
+            "Unsupported default schema_profile: "
+            f"{cfg.defaults.schema_profile}. Supported profiles: {', '.join(sorted(SUPPORTED_SCHEMA_PROFILES))}"
         )
     if cfg.defaults.max_rounds < 1:
         raise RuntimeError("defaults.max_rounds must be at least 1")
@@ -229,6 +242,8 @@ def load_config(*, cwd: Path, explicit_path: str | None = None) -> AppConfig:
     defaults = raw.get("defaults", {})
     cfg.defaults = DefaultsConfig(
         mode=defaults.get("mode", cfg.defaults.mode),
+        surface=str(defaults.get("surface", cfg.defaults.surface)),
+        schema_profile=str(defaults.get("schema_profile", cfg.defaults.schema_profile)),
         max_rounds=int(defaults.get("max_rounds", cfg.defaults.max_rounds)),
         base_ref=str(defaults.get("base_ref", cfg.defaults.base_ref)),
         char_budget=int(defaults.get("char_budget", cfg.defaults.char_budget)),

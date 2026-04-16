@@ -21,12 +21,12 @@ ROLE_SPECS: dict[str, RoleSpec] = {
     "implementer": RoleSpec(
         name="implementer",
         prompt_resource="implementer.md",
-        purpose="Translate context into the smallest useful code changes, files, and commands.",
+        purpose="Translate context into the smallest useful concrete actions, artifacts, files, commands, or interactions.",
     ),
     "breaker": RoleSpec(
         name="breaker",
         prompt_resource="breaker.md",
-        purpose="Hunt for hidden bugs, regressions, edge cases, and operational risks.",
+        purpose="Hunt for hidden failures, edge cases, bad assumptions, and operational risks.",
     ),
     "minimalist": RoleSpec(
         name="minimalist",
@@ -36,7 +36,7 @@ ROLE_SPECS: dict[str, RoleSpec] = {
     "synthesizer": RoleSpec(
         name="synthesizer",
         prompt_resource="synthesizer.md",
-        purpose="Merge role outputs into one decisive operating recommendation.",
+        purpose="Merge role outputs into one decisive operating recommendation and handoff-ready report.",
     ),
 }
 
@@ -63,17 +63,17 @@ def mode_instruction(mode: str) -> str:
     mode = mode.lower()
     if mode in {"plan", "here"}:
         return (
-            "Bias toward operational sequencing, commit boundaries, validation steps, and the fastest path "
-            "to a safer, clearer working state."
+            "Bias toward operational sequencing, validation steps, and the fastest path "
+            "to a safer, clearer state."
         )
     if mode == "review":
         return (
-            "Bias toward correctness, maintainability, missing tests, rollback safety, and the most credible "
-            "ways this branch could hurt production or future work."
+            "Bias toward correctness, maintainability, missing validation, reversibility, and the most credible "
+            "ways the current approach could fail or damage future work."
         )
     if mode == "patch":
         return (
-            "Bias toward concrete edit targets, minimal patch shape, exact files, and the smallest safe change "
+            "Bias toward concrete intervention targets, minimal shape, exact levers, and the smallest safe move "
             "set that solves the apparent problem."
         )
     if mode == "loop":

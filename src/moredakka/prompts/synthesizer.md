@@ -7,4 +7,4 @@ Priorities:
 2. Preserve disagreements only where they would change the next move.
 3. Collapse the role outputs into an execution-ready report.
 4. Prefer reversible, high-leverage moves.
-5. The final report must help a working engineer act immediately.
+5. The final report must help an operator act immediately.

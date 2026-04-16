@@ -11,6 +11,7 @@ from moredakka.runlog import (
     accumulate_usage,
     context_rendering_stats,
     estimate_cost_usd,
+    latest_run_artifact_summary,
     normalize_usage,
     preflight_run_dir,
     write_run_artifact,
@@ -81,6 +82,38 @@ class RunlogTests(unittest.TestCase):
             self.assertIn("20260414", str(path.parent))
             self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"ok": True})
             self.assertTrue(path.read_text(encoding="utf-8").endswith("\n"))
+
+    def test_latest_run_artifact_summary_reads_most_recent_valid_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            older = write_run_artifact(
+                cwd=root,
+                run_dir=".moredakka/runs",
+                invocation_id="20260414T000000Z-deadbeef",
+                artifact={
+                    "invocation": {"run_status": "success", "stop_reason": "max_rounds", "mode": "plan", "directive": None},
+                    "query_compilation": {"selected_ops": ["critique"]},
+                },
+            )
+            newer = write_run_artifact(
+                cwd=root,
+                run_dir=".moredakka/runs",
+                invocation_id="20260415T000000Z-feedface",
+                artifact={
+                    "invocation": {"run_status": "degraded", "stop_reason": "max_total_tokens", "mode": "review", "directive": "continue"},
+                    "query_compilation": {"selected_ops": ["branch", "compare"]},
+                },
+            )
+            older.touch()
+            newer.touch()
+
+            summary = latest_run_artifact_summary(cwd=root, run_dir=".moredakka/runs")
+
+            self.assertIsNotNone(summary)
+            self.assertEqual(summary["run_status"], "degraded")
+            self.assertEqual(summary["stop_reason"], "max_total_tokens")
+            self.assertEqual(summary["selected_ops"], ["branch", "compare"])
+            self.assertEqual(Path(summary["path"]), newer)
 
     def test_context_rendering_stats_detects_truncation(self) -> None:
         packet = ContextPacket(

@@ -10,15 +10,17 @@ from unittest.mock import patch
 from moredakka.errors import MoreDakkaRuntimeError
 
 from moredakka.config import AppConfig, DefaultsConfig, ProviderConfig, RoleConfig
+from moredakka.query_language import compile_query_plan, render_query_plan_summary, render_selected_ops
 from moredakka.context import ContextPacket
 from moredakka.orchestrator import (
     _global_system_prompt,
     _role_user_prompt,
+    _synthesis_prompt,
     estimate_novelty,
     run_workflow,
 )
 from moredakka.providers.base import ProviderResult
-from moredakka.schemas import role_analysis_schema
+from moredakka.schemas import role_analysis_schema, schema_name_for_profile
 from moredakka.util import sha256_json
 
 
@@ -40,7 +42,7 @@ class _BarrierProvider:
         previous_response_id: str | None = None,
     ) -> ProviderResult:
         del system, schema, previous_response_id
-        if schema_name == "moredakka_role_analysis":
+        if schema_name.startswith("moredakka_role_analysis"):
             type(self).barrier.wait()
             role = "unknown"
             marker = "ROLE\n"
@@ -50,6 +52,7 @@ class _BarrierProvider:
                 "role": role,
                 "focus": "focus",
                 "one_sentence_take": "take",
+                "observations": [],
                 "top_problems": [],
                 "candidate_paths": [],
                 "recommended_steps": [],
@@ -79,6 +82,10 @@ class _BarrierProvider:
                 "disagreements": [],
                 "stop_conditions": [],
                 "open_questions": [],
+                "operator_summary": None,
+                "handoff_paragraph": None,
+                "status_ledger": None,
+                "intent_card": None,
                 "confidence": 0.5,
                 "confidence_rationale": "ok",
             }
@@ -109,7 +116,7 @@ class _BudgetProvider:
         previous_response_id: str | None = None,
     ) -> ProviderResult:
         del system, user, schema, previous_response_id
-        if schema_name != "moredakka_role_analysis":
+        if not schema_name.startswith("moredakka_role_analysis"):
             raise AssertionError("synthesis should not run after budget stop")
         return ProviderResult(
             provider=self.name,
@@ -118,6 +125,7 @@ class _BudgetProvider:
                 "role": "planner",
                 "focus": "focus",
                 "one_sentence_take": "take",
+                "observations": [],
                 "top_problems": [],
                 "candidate_paths": [],
                 "recommended_steps": [],
@@ -152,11 +160,12 @@ class _LowNoveltyProvider:
         previous_response_id: str | None = None,
     ) -> ProviderResult:
         del system, user, schema, previous_response_id
-        if schema_name == "moredakka_role_analysis":
+        if schema_name.startswith("moredakka_role_analysis"):
             data = {
                 "role": "planner",
                 "focus": "focus",
                 "one_sentence_take": "steady state",
+                "observations": [],
                 "top_problems": [{"title": "same issue", "detail": "same detail"}],
                 "candidate_paths": [],
                 "recommended_steps": [{"title": "same step", "why": "same why"}],
@@ -182,6 +191,10 @@ class _LowNoveltyProvider:
                 "disagreements": [],
                 "stop_conditions": [],
                 "open_questions": [],
+                "operator_summary": None,
+                "handoff_paragraph": None,
+                "status_ledger": None,
+                "intent_card": None,
                 "confidence": 0.5,
                 "confidence_rationale": "ok",
             }
@@ -193,6 +206,39 @@ class _LowNoveltyProvider:
             response_id=None,
             usage=None,
         )
+
+
+class PromptCompilationTests(unittest.TestCase):
+    def test_role_prompt_includes_directive_and_compiled_plan(self) -> None:
+        user_prompt = _role_user_prompt(
+            mode="plan",
+            objective="objective",
+            role_name="planner",
+            context_text="context",
+            round_index=1,
+            directive="be critical and keep it tight",
+            query_plan_summary="- critique\n- condense",
+            selected_ops_text="critique condense",
+        )
+
+        self.assertIn("DIRECTIVE PROSE\nbe critical and keep it tight", user_prompt)
+        self.assertIn("SELECTED OPERATIONS\ncritique condense", user_prompt)
+        self.assertIn("COMPILED PLAN\n- critique\n- condense", user_prompt)
+
+    def test_synthesis_prompt_includes_final_artifact_obligations(self) -> None:
+        synthesis_prompt = _synthesis_prompt(
+            mode="plan",
+            objective="objective",
+            context_text="context",
+            round_summaries="ROUND 1\n...",
+            directive="continue but first tell me what remains",
+            query_plan_summary="- resume\n- close",
+            selected_ops_text="resume close",
+            final_artifact_text="status_ledger\noperator_summary",
+        )
+
+        self.assertIn("DIRECTIVE PROSE\ncontinue but first tell me what remains", synthesis_prompt)
+        self.assertIn("FINAL ARTIFACT OBLIGATIONS\nstatus_ledger\noperator_summary", synthesis_prompt)
 
 
 class NoveltyTests(unittest.TestCase):
@@ -283,6 +329,7 @@ class NoveltyTests(unittest.TestCase):
         self.assertEqual(result.run_artifact["invocation"]["stop_reason"], "max_rounds")
         self.assertIn("usage_totals", result.run_artifact)
         self.assertEqual(result.run_artifact["provider_roster"][-1], "synthesizer: openai/openai-model")
+        self.assertEqual(result.run_artifact["query_compilation"]["selected_ops"], [])
 
     @patch("moredakka.orchestrator.render_context_packet", return_value="context")
     @patch("moredakka.orchestrator.build_context_packet")
@@ -339,6 +386,65 @@ class NoveltyTests(unittest.TestCase):
         self.assertEqual(result.run_artifact["invocation"]["stop_reason"], "max_total_tokens")
         self.assertEqual(result.synthesis["selected_path"]["name"], "bounded-stop")
         self.assertEqual(result.provider_notes, ["planner: openai/openai-model"])
+
+    @patch("moredakka.orchestrator.render_context_packet", return_value="context")
+    @patch("moredakka.orchestrator.build_context_packet")
+    @patch("moredakka.orchestrator.build_provider")
+    @patch("moredakka.orchestrator.load_config")
+    def test_run_workflow_compiles_directive_and_adds_operator_artifacts(
+        self,
+        mock_load_config: unittest.mock.MagicMock,
+        mock_build_provider: unittest.mock.MagicMock,
+        mock_build_context_packet: unittest.mock.MagicMock,
+        _mock_render_context_packet: unittest.mock.MagicMock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = AppConfig(
+                defaults=DefaultsConfig(max_rounds=1, cache_dir=".moredakka/cache"),
+                providers={
+                    "openai": ProviderConfig(
+                        name="openai",
+                        kind="openai",
+                        model="gpt-5.4",
+                        api_key_env="OPENAI_API_KEY",
+                    )
+                },
+                roles={
+                    "planner": RoleConfig(name="planner", provider="openai"),
+                    "implementer": RoleConfig(name="implementer", provider="openai"),
+                    "breaker": RoleConfig(name="breaker", provider="openai"),
+                    "minimalist": RoleConfig(name="minimalist", provider="openai"),
+                    "synthesizer": RoleConfig(name="synthesizer", provider="openai"),
+                },
+            )
+            packet = ContextPacket(
+                cwd=str(root),
+                repo_root=str(root),
+                mode="plan",
+                objective="",
+                inferred_objective="objective",
+                base_ref="main",
+                branch=None,
+            )
+            mock_load_config.return_value = config
+            mock_build_provider.side_effect = lambda provider_cfg: _LowNoveltyProvider(provider_cfg.name)
+            mock_build_context_packet.return_value = packet
+
+            result = run_workflow(
+                cwd=root,
+                mode="plan",
+                objective=None,
+                directive="continue from where we were, but first tell me what remains and keep it tight",
+                rounds=1,
+                use_cache=False,
+            )
+
+        self.assertEqual(result.run_artifact["query_compilation"]["selected_ops"], ["resume", "close", "condense"])
+        self.assertIsInstance(result.run_artifact["query_compilation"]["query_plan"]["context_policy"], dict)
+        self.assertIn("operator_summary", result.synthesis)
+        self.assertIn("status_ledger", result.synthesis)
+        self.assertIn("remaining", result.synthesis["status_ledger"])
 
     @patch("moredakka.orchestrator.render_context_packet", return_value="context")
     @patch("moredakka.orchestrator.build_context_packet")
@@ -452,6 +558,7 @@ class NoveltyTests(unittest.TestCase):
             cache_dir = root / ".moredakka" / "cache"
             cache_dir.mkdir(parents=True)
             system = _global_system_prompt()
+            plan = compile_query_plan(mode="plan", directive=None, base_role_names=["planner"], packet=packet)
             user_prompt = _role_user_prompt(
                 mode="plan",
                 objective="objective",
@@ -459,6 +566,9 @@ class NoveltyTests(unittest.TestCase):
                 context_text="context",
                 round_index=1,
                 peer_summaries="",
+                directive="",
+                query_plan_summary=render_query_plan_summary(plan),
+                selected_ops_text=render_selected_ops(plan),
             )
             cache_key = sha256_json(
                 {
@@ -466,8 +576,8 @@ class NoveltyTests(unittest.TestCase):
                     "model": "openai-model",
                     "system": system,
                     "user": user_prompt,
-                    "schema_name": "moredakka_role_analysis",
-                    "schema": role_analysis_schema(),
+                    "schema_name": schema_name_for_profile("moredakka_role_analysis", "software"),
+                    "schema": role_analysis_schema("software"),
                     "previous_response_id": None,
                 }
             )

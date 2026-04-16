@@ -2,30 +2,25 @@
 
 `moredakka` is a CLI for one specific job:
 
-take the current working surface of a software task, build a tight context packet, run a bounded multi-model loop with differentiated roles, and return a disciplined next move instead of a pile of vibes.
+take the current problem surface, build a tight local context packet, run a bounded multi-model loop with differentiated roles, and return a disciplined next move instead of a pile of vibes.
 
-It is deliberately narrower than an open-ended coding agent. It does not try to become your IDE, your issue tracker, or your CI system. It does one thing: it sharpens what to do next on the work already under your hands.
+It is deliberately narrower than an open-ended chat shell or unbounded agent swarm. It is meant to be a canonical bounded problem-solving tool. Codebase and repo context are one strong current specialization path, not the product's identity.
 
 ## What it does
 
-- Inspects the local work surface:
-  - current repo root and working directory
-  - branch, status, recent commits
-  - working-tree diff or branch-vs-base diff
-  - nearby docs such as `README.md`, `AGENTS.md`, `PLAN.md`, `TODO.md`, `SPEC.md`
-- Builds a bounded context packet instead of dumping the whole repo into every model call.
+- Inspects the local problem surface.
+- Builds a bounded context packet instead of dumping everything into every model call.
 - Fans out to specialized roles rather than asking every model the same generic question.
 - Runs 1 to N bounded rounds, with optional cross-critique.
-- Synthesizes a single operating recommendation with:
-  - top problems
-  - next actions
-  - suggested commit plan
-  - edit targets
-  - tests
-  - risks
-  - disagreement log
+- Synthesizes a single operating recommendation with typed structure and preserved disagreement.
 - Caches identical calls locally so repeated inspection is cheaper.
 - Writes one durable run artifact per invocation with provenance, prompts, responses, usage, and stop reason.
+
+Today, the strongest built-in surface is repo/code work:
+- current repo root and working directory
+- branch, status, recent commits
+- working-tree diff or branch-vs-base diff
+- nearby docs such as `README.md`, `AGENTS.md`, `PLAN.md`, `TODO.md`, `SPEC.md`
 
 ## Default model roster
 
@@ -44,14 +39,15 @@ The point is not to cosplay diversity with five copies of one model. The point i
 ```bash
 moredakka doctor
 moredakka here
+moredakka here --ask "what actually matters here; give me options and tighten the answer"
 moredakka plan --objective "stabilize auth refresh and reduce deploy risk"
-moredakka review --base-ref main
+moredakka review --base-ref main --ask "be adversarial, keep it small, and tell me what's left"
 moredakka patch --objective "turn this diff into a minimal safe patch plan"
 moredakka loop --rounds 3
 moredakka pack --base-ref main
 ```
 
-`moredakka here` is the fast smoke-test path. It defaults to one round unless you pass `--rounds`, which keeps the default invocation practical without changing the deeper planning modes.
+`moredakka here` is the fast smoke-test path. It defaults to one round unless you pass `--rounds`, which keeps the default invocation practical without changing the deeper planning modes. For nontrivial steering, prefer `--ask` with free directive prose over memorizing fixed operator words; the compiler infers bounded canonical operations, logs what it selected, and keeps execution inspectable.
 
 ## Quick start
 
@@ -101,6 +97,7 @@ The current foundational completeness seam is:
 - Rust owns the compact deterministic local-surface sidecar (`doctor`, `pack`)
 - Python still owns provider orchestration
 - each orchestration run now emits a durable run artifact under `.moredakka/runs/`
+- the current built-in surface is repo/code heavy, but the product direction is a generic bounded problem-solving engine with pluggable surface types
 
 ## Development
 
@@ -155,14 +152,24 @@ Every non-`pack` command returns a unified report with:
 
 - invocation id and run artifact path
 - inferred objective
+- query compilation summary:
+  - raw directive prose
+  - candidate operations
+  - selected canonical operations
+  - compiled plan summary
 - top problems
 - selected path
 - next actions
-- commit plan
-- test plan
+- suggested commit plan
 - edit targets
-- major risks
-- disagreements
+- tests
+- risks
+- disagreement log
+- optional operator artifacts when requested/inferred:
+  - operator summary
+  - status ledger
+  - intent card
+  - handoff paragraph
 - stop conditions
 - confidence
 - usage/cost summary
@@ -174,12 +181,14 @@ Every non-`pack` command returns a unified report with:
 
 It is a bounded operational primitive:
 
-1. stay glued to the local work surface
+1. stay glued to the current problem surface
 2. assign distinct jobs to distinct models
 3. force typed outputs
 4. make disagreement explicit
 5. stop when novelty collapses
 6. emit actions, not atmosphere
+
+Repo/code context is one important surface, not the universal one.
 
 ## Layout
 
