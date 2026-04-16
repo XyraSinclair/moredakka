@@ -267,8 +267,8 @@ class NoveltyTests(unittest.TestCase):
     def test_estimate_novelty_zero_for_empty_round(self) -> None:
         self.assertEqual(estimate_novelty([], []), 0.0)
 
-    @patch("moredakka.orchestrator.render_context_packet", return_value="context")
-    @patch("moredakka.orchestrator.build_context_packet")
+    @patch("moredakka.surfaces.repo.render_context_packet", return_value="context")
+    @patch("moredakka.surfaces.repo.build_context_packet")
     @patch("moredakka.orchestrator.default_role_sequence", return_value=["planner", "implementer"])
     @patch("moredakka.orchestrator.build_provider")
     @patch("moredakka.orchestrator.load_config")
@@ -331,8 +331,8 @@ class NoveltyTests(unittest.TestCase):
         self.assertEqual(result.run_artifact["provider_roster"][-1], "synthesizer: openai/openai-model")
         self.assertEqual(result.run_artifact["query_compilation"]["selected_ops"], [])
 
-    @patch("moredakka.orchestrator.render_context_packet", return_value="context")
-    @patch("moredakka.orchestrator.build_context_packet")
+    @patch("moredakka.surfaces.repo.render_context_packet", return_value="context")
+    @patch("moredakka.surfaces.repo.build_context_packet")
     @patch("moredakka.orchestrator.default_role_sequence", return_value=["planner"])
     @patch("moredakka.orchestrator.build_provider")
     @patch("moredakka.orchestrator.load_config")
@@ -387,8 +387,8 @@ class NoveltyTests(unittest.TestCase):
         self.assertEqual(result.synthesis["selected_path"]["name"], "bounded-stop")
         self.assertEqual(result.provider_notes, ["planner: openai/openai-model"])
 
-    @patch("moredakka.orchestrator.render_context_packet", return_value="context")
-    @patch("moredakka.orchestrator.build_context_packet")
+    @patch("moredakka.surfaces.repo.render_context_packet", return_value="context")
+    @patch("moredakka.surfaces.repo.build_context_packet")
     @patch("moredakka.orchestrator.build_provider")
     @patch("moredakka.orchestrator.load_config")
     def test_run_workflow_compiles_directive_and_adds_operator_artifacts(
@@ -441,13 +441,16 @@ class NoveltyTests(unittest.TestCase):
             )
 
         self.assertEqual(result.run_artifact["query_compilation"]["selected_ops"], ["resume", "close", "condense"])
-        self.assertIsInstance(result.run_artifact["query_compilation"]["query_plan"]["context_policy"], dict)
+        self.assertEqual(
+            result.run_artifact["query_compilation"]["query_plan"]["final_artifacts"],
+            ["report", "status_ledger", "operator_summary"],
+        )
         self.assertIn("operator_summary", result.synthesis)
         self.assertIn("status_ledger", result.synthesis)
         self.assertIn("remaining", result.synthesis["status_ledger"])
 
-    @patch("moredakka.orchestrator.render_context_packet", return_value="context")
-    @patch("moredakka.orchestrator.build_context_packet")
+    @patch("moredakka.surfaces.repo.render_context_packet", return_value="context")
+    @patch("moredakka.surfaces.repo.build_context_packet")
     @patch("moredakka.orchestrator.default_role_sequence", return_value=["planner"])
     @patch("moredakka.orchestrator.build_provider")
     @patch("moredakka.orchestrator.load_config")
@@ -512,8 +515,8 @@ class NoveltyTests(unittest.TestCase):
             self.assertEqual(payload["invocation"]["stop_reason"], "error")
             self.assertEqual(payload["error"]["type"], "RuntimeError")
 
-    @patch("moredakka.orchestrator.render_context_packet", return_value="context")
-    @patch("moredakka.orchestrator.build_context_packet")
+    @patch("moredakka.surfaces.repo.render_context_packet", return_value="context")
+    @patch("moredakka.surfaces.repo.build_context_packet")
     @patch("moredakka.orchestrator.default_role_sequence", return_value=["planner"])
     @patch("moredakka.orchestrator.build_provider")
     @patch("moredakka.orchestrator.load_config")

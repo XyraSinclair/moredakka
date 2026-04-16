@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib import resources
-from typing import Iterable
 
 
 @dataclass(frozen=True)

@@ -9,10 +9,6 @@ _SURFACE_ADAPTERS: dict[str, SurfaceAdapter] = {
 }
 
 
-def supported_surfaces() -> set[str]:
-    return set(_SURFACE_ADAPTERS)
-
-
 def resolve_surface_adapter(surface: str) -> SurfaceAdapter:
     try:
         return _SURFACE_ADAPTERS[surface]

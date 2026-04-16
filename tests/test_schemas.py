@@ -23,9 +23,10 @@ class SchemaTests(unittest.TestCase):
         schema = synthesis_schema("software")
         self.assertIn("selected_path", schema["required"])
         self.assertIn("commit_plan", schema["required"])
-        self.assertIn("operator_summary", schema["required"])
-        self.assertIn("status_ledger", schema["required"])
-        self.assertIn("intent_card", schema["required"])
+        self.assertNotIn("operator_summary", schema["required"])
+        self.assertNotIn("status_ledger", schema["required"])
+        self.assertNotIn("intent_card", schema["required"])
+        self.assertIn("operator_summary", schema["properties"])
 
     def test_generic_synthesis_schema_has_required_fields(self) -> None:
         schema = synthesis_schema("generic")
@@ -51,7 +52,7 @@ class SchemaTests(unittest.TestCase):
         }
         self.assertTrue(minimal_shape_ok(role_payload, synthesis=False, profile="software"))
 
-    def test_minimal_shape_ok_for_generic_synthesis_with_null_operator_fields(self) -> None:
+    def test_minimal_shape_ok_for_generic_synthesis_without_optional_artifacts(self) -> None:
         payload = {
             "inferred_objective": "objective",
             "one_sentence_take": "take",
@@ -63,10 +64,6 @@ class SchemaTests(unittest.TestCase):
             "disagreements": [],
             "stop_conditions": [],
             "open_questions": [],
-            "operator_summary": None,
-            "handoff_paragraph": None,
-            "status_ledger": None,
-            "intent_card": None,
             "confidence": 0.5,
             "confidence_rationale": "ok",
         }

@@ -16,12 +16,6 @@ def _bullet_list(items: list[str]) -> str:
     return "\n".join(f"- {item}" for item in items)
 
 
-def _get_attr(surface: SurfaceLike, name: str, default: Any = None) -> Any:
-    if isinstance(surface, ProblemSurface):
-        return getattr(surface, name, default)
-    return getattr(surface, name, default)
-
-
 def _surface_summary_lines(surface: SurfaceLike) -> list[str]:
     if isinstance(surface, ProblemSurface):
         lines = [
@@ -174,20 +168,11 @@ def _query_compilation_lines(run_artifact: dict[str, Any] | None) -> list[str]:
     query = run_artifact.get("query_compilation", {}) or {}
     directive = query.get("directive") or "(none)"
     selected = query.get("selected_ops", []) or []
-    candidates = query.get("candidate_operations", []) or []
     plan = query.get("query_plan", {}) or {}
     lines = [
         f"- directive={directive}",
         f"- selected_ops={', '.join(selected) if selected else '(none)'}",
     ]
-    if candidates:
-        lines.append("- candidate_operations:")
-        for candidate in candidates:
-            lines.append(
-                "  - "
-                f"{candidate.get('canonical_op', '')} ({candidate.get('score', '')}) [{candidate.get('status', '')}]"
-                f" — {candidate.get('rationale', '')}"
-            )
     if plan:
         objective_strategy = plan.get("objective_strategy")
         final_artifacts = plan.get("final_artifacts")
@@ -244,7 +229,7 @@ def render_markdown(
     lines.extend(_invocation_lines(run_artifact, run_artifact_path))
     lines.append("")
     lines.append("## inferred objective")
-    lines.append(synthesis.get("inferred_objective", _get_attr(packet, "inferred_objective", "")))
+    lines.append(synthesis.get("inferred_objective", getattr(packet, "inferred_objective", "")))
     lines.append("")
     lines.append("## query compilation")
     lines.extend(_query_compilation_lines(run_artifact))

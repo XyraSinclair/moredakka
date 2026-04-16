@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any
 
 
@@ -11,12 +10,6 @@ SUPPORTED_SCHEMA_PROFILES = {"software", "generic"}
 
 def _string_array_schema() -> dict[str, Any]:
     return {"type": "array", "items": {"type": "string"}}
-
-
-def _nullable(schema: dict[str, Any]) -> dict[str, Any]:
-    copied = deepcopy(schema)
-    copied["type"] = [copied["type"], "null"] if isinstance(copied.get("type"), str) else [*copied.get("type", []), "null"]
-    return copied
 
 
 def _issue_schema() -> dict[str, Any]:
@@ -214,24 +207,25 @@ def _common_synthesis_properties(action_key: str, validation_key: str, action_sc
         "disagreements": {"type": "array", "items": _disagreement_schema()},
         "stop_conditions": _string_array_schema(),
         "open_questions": _string_array_schema(),
-        "operator_summary": _nullable({"type": "string"}),
-        "handoff_paragraph": _nullable({"type": "string"}),
-        "status_ledger": _nullable(_status_ledger_schema()),
-        "intent_card": _nullable(_intent_card_schema()),
+        "operator_summary": {"type": "string"},
+        "handoff_paragraph": {"type": "string"},
+        "status_ledger": _status_ledger_schema(),
+        "intent_card": _intent_card_schema(),
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "confidence_rationale": {"type": "string"},
     }
 
 
 def synthesis_schema(profile: str = "software") -> dict[str, Any]:
+    optional_artifacts = {"operator_summary", "handoff_paragraph", "status_ledger", "intent_card"}
     if profile == "software":
         properties = _common_synthesis_properties("next_actions", "tests", _software_step_schema())
         properties["commit_plan"] = {"type": "array", "items": _commit_schema()}
         properties["edit_targets"] = {"type": "array", "items": _edit_schema()}
-        required = list(properties.keys())
+        required = [key for key in properties if key not in optional_artifacts]
     elif profile == "generic":
         properties = _common_synthesis_properties("next_actions", "validation_checks", _action_schema())
-        required = list(properties.keys())
+        required = [key for key in properties if key not in optional_artifacts]
     else:
         raise KeyError(profile)
     return {
@@ -246,14 +240,6 @@ def minimal_shape_ok(payload: dict[str, Any], *, synthesis: bool = False, profil
     schema = synthesis_schema(profile) if synthesis else role_analysis_schema(profile)
     required = schema["required"]
     return isinstance(payload, dict) and all(key in payload for key in required)
-
-
-def schema_copy(name: str, profile: str = "software") -> dict[str, Any]:
-    if name == ROLE_ANALYSIS_SCHEMA_NAME:
-        return deepcopy(role_analysis_schema(profile))
-    if name == SYNTHESIS_SCHEMA_NAME:
-        return deepcopy(synthesis_schema(profile))
-    raise KeyError(name)
 
 
 def schema_name_for_profile(name: str, profile: str) -> str:

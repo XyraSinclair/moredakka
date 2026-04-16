@@ -6,7 +6,6 @@ from pathlib import Path
 
 import os
 
-from moredakka.context import build_context_packet
 from moredakka.doctor import render_doctor_json, render_doctor_markdown, run_doctor
 from moredakka.orchestrator import run_workflow
 from moredakka.report import render_json, render_markdown

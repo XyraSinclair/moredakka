@@ -14,16 +14,10 @@ from moredakka.errors import MoreDakkaRuntimeError
 from moredakka.problem_surface import ProblemSurface
 from moredakka.providers import build_provider
 from moredakka.providers.base import ProviderResult
-from moredakka.query_language import (
-    compile_query_plan,
-    render_candidate_operations,
-    render_query_plan_summary,
-    render_selected_ops,
-)
+from moredakka.query_language import compile_query_plan, render_query_plan_summary, render_selected_ops
 from moredakka.query_plan import QueryPlan
-from moredakka.roles import ROLE_SPECS, default_role_sequence, load_prompt, mode_instruction
+from moredakka.roles import default_role_sequence, load_prompt, mode_instruction
 from moredakka.surface_registry import resolve_surface_adapter
-from moredakka.surfaces.repo import problem_surface_from_context_packet
 from moredakka.runlog import (
     accumulate_usage,
     config_metadata,
@@ -435,13 +429,8 @@ def _query_compilation_payload(plan: QueryPlan, *, schema_profile: str) -> dict[
                 "mode": plan.mode,
                 "schema_profile": schema_profile,
                 "objective_strategy": plan.objective_strategy,
-                "context_policy": plan.context_policy,
-                "role_plan": plan.role_plan,
-                "synthesis_policy": plan.synthesis_policy,
                 "final_artifacts": plan.final_artifacts,
-                "stop_policy": plan.stop_policy,
                 "context_signals": plan.context_signals,
-                "notes": plan.notes,
             }
         ),
     }
@@ -460,16 +449,11 @@ def _augment_synthesis_artifacts(
     next_titles = [item.get("title", "") for item in next_actions if item.get("title")]
 
     allowed = set(plan.final_artifacts)
-    if "operator_summary" not in allowed:
-        updated["operator_summary"] = None
-    if "status_ledger" not in allowed:
-        updated["status_ledger"] = None
-    if "intent_card" not in allowed:
-        updated["intent_card"] = None
-    if "handoff_paragraph" not in allowed:
-        updated["handoff_paragraph"] = None
+    for key in ["operator_summary", "status_ledger", "intent_card", "handoff_paragraph"]:
+        if key not in allowed:
+            updated.pop(key, None)
 
-    if "operator_summary" in plan.final_artifacts and not updated.get("operator_summary"):
+    if "operator_summary" in allowed and not updated.get("operator_summary"):
         summary_parts = [updated.get("one_sentence_take", "").strip()]
         if selected_path.get("name"):
             summary_parts.append(f"Path: {selected_path.get('name')}.")
@@ -619,28 +603,16 @@ def run_workflow(
         has_recent_run_artifact = recent_run_summary is not None
         preflight_run_dir(cwd=cwd, run_dir=config.defaults.run_dir)
 
-        if resolved_surface_name == "repo":
-            packet = build_context_packet(
-                cwd=cwd,
-                mode=mode,
-                objective=objective,
-                base_ref=base_ref,
-                char_budget=char_budget,
-            )
-            surface = problem_surface_from_context_packet(packet)
-            context_text = render_context_packet(packet, char_budget=char_budget)
-            context_stats = context_rendering_stats(surface, context_text, char_budget=char_budget)
-        else:
-            surface_adapter = resolve_surface_adapter(resolved_surface_name)
-            surface, packet = surface_adapter.build_surface(
-                cwd=cwd,
-                mode=mode,
-                objective=objective,
-                base_ref=base_ref,
-                char_budget=char_budget,
-            )
-            context_text = surface_adapter.render_surface(packet, char_budget=char_budget)
-            context_stats = context_rendering_stats(surface, context_text, char_budget=char_budget)
+        surface_adapter = resolve_surface_adapter(resolved_surface_name)
+        surface, packet = surface_adapter.build_surface(
+            cwd=cwd,
+            mode=mode,
+            objective=objective,
+            base_ref=base_ref,
+            char_budget=char_budget,
+        )
+        context_text = surface_adapter.render_surface(packet, char_budget=char_budget)
+        context_stats = context_rendering_stats(surface, context_text, char_budget=char_budget)
         query_plan = compile_query_plan(
             mode=mode,
             directive=directive,
@@ -793,7 +765,7 @@ def run_workflow(
                 system_prompt=system,
                 user_prompt=synthesis_prompt,
             )
-            if not minimal_shape_ok(synthesis_cached.result.data, synthesis=True):
+            if not minimal_shape_ok(synthesis_cached.result.data, synthesis=True, profile=resolved_schema_profile):
                 raise RuntimeError(
                     f"Provider {synthesis_cached.result.provider}/{synthesis_cached.result.model} returned malformed synthesis output."
                 )

@@ -31,20 +31,7 @@ OP_ORDER = [
     "local",
 ]
 
-SELECTED_ORDER = [
-    "intent",
-    "resume",
-    "fresh",
-    "close",
-    "critique",
-    "minimal",
-    "branch",
-    "compare",
-    "integrate",
-    "condense",
-    "handoff",
-    "local",
-]
+SELECTED_ORDER = OP_ORDER
 
 
 def _contains_any(text: str, phrases: Iterable[str]) -> list[str]:
@@ -65,7 +52,7 @@ def _candidate_specs(text: str, *, mode: str) -> list[tuple[str, float, list[str
     add(
         "resume",
         0.92,
-        _contains_any(text, ["continue from where we were", "continue from the last run", "continue from where we were", "continue"]),
+        _contains_any(text, ["continue from where we were", "continue from the last run", "continue"]),
         "resume/continuation cues in directive prose",
     )
     add(
@@ -95,7 +82,7 @@ def _candidate_specs(text: str, *, mode: str) -> list[tuple[str, float, list[str
     add(
         "minimal",
         0.84,
-        _contains_any(text, ["keep it small", "keep it minimal", "smallest safe", "minimal", "keep it small"]),
+        _contains_any(text, ["keep it small", "keep it minimal", "smallest safe", "minimal"]),
         "scope-cutting cues in directive prose",
     )
     add(
@@ -163,41 +150,6 @@ def _merge_candidates(specs: list[tuple[str, float, list[str], str]]) -> list[Ca
                 status=current.status,
             )
     return sorted(merged.values(), key=lambda item: (-item.score, OP_ORDER.index(item.canonical_op) if item.canonical_op in OP_ORDER else 999))
-
-
-def _choose_selected(candidates: list[CandidateOperation]) -> list[CandidateOperation]:
-    selected: list[CandidateOperation] = []
-    rejected: dict[str, CandidateOperation] = {}
-
-    by_op = {candidate.canonical_op: candidate for candidate in candidates}
-    if "fresh" in by_op and "resume" in by_op:
-        winner = "fresh" if by_op["fresh"].score >= by_op["resume"].score else "resume"
-        loser = "resume" if winner == "fresh" else "fresh"
-        rejected[loser] = replace(by_op[loser], status="rejected", rationale=by_op[loser].rationale + "; rejected because it conflicts with higher-scored state policy")
-        by_op[winner] = replace(by_op[winner], status="selected")
-
-    threshold = 0.8
-    for op in OP_ORDER:
-        candidate = by_op.get(op)
-        if candidate is None:
-            continue
-        if op in rejected:
-            continue
-        if candidate.score >= threshold:
-            selected.append(replace(candidate, status="selected"))
-        else:
-            rejected[op] = replace(candidate, status="rejected", rationale=candidate.rationale + "; rejected because score was below selection threshold")
-
-    selected_ops = {item.canonical_op for item in selected}
-    finalized: list[CandidateOperation] = []
-    for candidate in candidates:
-        if candidate.canonical_op in rejected:
-            finalized.append(rejected[candidate.canonical_op])
-        elif candidate.canonical_op in selected_ops:
-            finalized.append(next(item for item in selected if item.canonical_op == candidate.canonical_op))
-        else:
-            finalized.append(replace(candidate, status="uncertain"))
-    return finalized
 
 
 def _selected_ops(candidates: list[CandidateOperation]) -> list[str]:
@@ -344,22 +296,6 @@ def _apply_contextual_adjustments(
     if mode == "patch" and packet and packet.diff_excerpt:
         upsert("minimal", 0.86, ["patch mode + diff"], "patch mode with a live diff should bias toward smaller concrete changes")
     return _merge_candidates([(item.canonical_op, item.score, item.evidence, item.rationale) for item in adjusted])
-
-
-OP_FAMILIES = {
-    "intent": "objective",
-    "resume": "state",
-    "fresh": "state",
-    "close": "closure",
-    "critique": "analysis",
-    "minimal": "analysis",
-    "branch": "exploration",
-    "compare": "exploration",
-    "integrate": "exploration",
-    "condense": "output",
-    "handoff": "output",
-    "local": "context",
-}
 
 
 def _apply_solver(
