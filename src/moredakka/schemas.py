@@ -159,6 +159,10 @@ def _intent_card_schema() -> dict[str, Any]:
     }
 
 
+def _nullable(schema: dict[str, Any]) -> dict[str, Any]:
+    return {"anyOf": [schema, {"type": "null"}]}
+
+
 def _common_role_properties(action_key: str, validation_key: str, action_schema: dict[str, Any]) -> dict[str, Any]:
     return {
         "role": {"type": "string"},
@@ -207,25 +211,29 @@ def _common_synthesis_properties(action_key: str, validation_key: str, action_sc
         "disagreements": {"type": "array", "items": _disagreement_schema()},
         "stop_conditions": _string_array_schema(),
         "open_questions": _string_array_schema(),
-        "operator_summary": {"type": "string"},
-        "handoff_paragraph": {"type": "string"},
-        "status_ledger": _status_ledger_schema(),
-        "intent_card": _intent_card_schema(),
+        "operator_summary": {"type": ["string", "null"]},
+        "handoff_paragraph": {"type": ["string", "null"]},
+        "status_ledger": _nullable(_status_ledger_schema()),
+        "intent_card": _nullable(_intent_card_schema()),
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "confidence_rationale": {"type": "string"},
     }
 
 
 def synthesis_schema(profile: str = "software") -> dict[str, Any]:
-    optional_artifacts = {"operator_summary", "handoff_paragraph", "status_ledger", "intent_card"}
+    # OpenAI/Azure strict JSON schema requires every declared property to be
+    # listed in `required`. Operator-facing artifacts are therefore
+    # required-but-nullable in the provider contract. `minimal_shape_ok` remains
+    # deliberately more permissive as a lightweight compatibility guard for
+    # older or hand-built payloads that omit those artifact keys entirely.
     if profile == "software":
         properties = _common_synthesis_properties("next_actions", "tests", _software_step_schema())
         properties["commit_plan"] = {"type": "array", "items": _commit_schema()}
         properties["edit_targets"] = {"type": "array", "items": _edit_schema()}
-        required = [key for key in properties if key not in optional_artifacts]
+        required = list(properties.keys())
     elif profile == "generic":
         properties = _common_synthesis_properties("next_actions", "validation_checks", _action_schema())
-        required = [key for key in properties if key not in optional_artifacts]
+        required = list(properties.keys())
     else:
         raise KeyError(profile)
     return {
@@ -239,6 +247,9 @@ def synthesis_schema(profile: str = "software") -> dict[str, Any]:
 def minimal_shape_ok(payload: dict[str, Any], *, synthesis: bool = False, profile: str = "software") -> bool:
     schema = synthesis_schema(profile) if synthesis else role_analysis_schema(profile)
     required = schema["required"]
+    if synthesis:
+        optional_artifacts = {"operator_summary", "handoff_paragraph", "status_ledger", "intent_card"}
+        required = [key for key in required if key not in optional_artifacts]
     return isinstance(payload, dict) and all(key in payload for key in required)
 
 
