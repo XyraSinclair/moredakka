@@ -41,6 +41,7 @@ moredakka doctor
 moredakka here
 moredakka here --ask "what actually matters here; give me options and tighten the answer"
 moredakka plan --objective "stabilize auth refresh and reduce deploy risk"
+moredakka plan --provider-timeout-seconds 180 --max-wall-seconds 900 --objective "run a deliberately heavy comparison pass"
 moredakka review --base-ref main --ask "be adversarial, keep it small, and tell me what's left"
 moredakka patch --objective "turn this diff into a minimal safe patch plan"
 moredakka loop --rounds 3
@@ -128,6 +129,7 @@ Config lets you change:
 - cache directory
 - run artifact directory
 - optional hard bounds for total tokens, cost, and wall time
+- hard per-provider call timeout, enforced outside the provider SDK
 - optional per-provider price hints for local cost estimation
 
 Example contrast-role override:

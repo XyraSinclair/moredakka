@@ -138,6 +138,7 @@ class ConfigTests(unittest.TestCase):
                         "max_total_tokens = 12345",
                         "max_cost_usd = 1.25",
                         "max_wall_seconds = 30",
+                        "provider_timeout_seconds = 7",
                         "[providers.openrouter_planner]",
                         "input_cost_per_million_tokens = 2.5",
                         "output_cost_per_million_tokens = 10.0",
@@ -153,6 +154,7 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.defaults.max_total_tokens, 12345)
             self.assertEqual(config.defaults.max_cost_usd, 1.25)
             self.assertEqual(config.defaults.max_wall_seconds, 30)
+            self.assertEqual(config.defaults.provider_timeout_seconds, 7)
             self.assertEqual(config.providers['openrouter_planner'].input_cost_per_million_tokens, 2.5)
             self.assertEqual(config.providers['openrouter_planner'].output_cost_per_million_tokens, 10.0)
 
@@ -164,6 +166,7 @@ class ConfigTests(unittest.TestCase):
                     [
                         "[defaults]",
                         "max_total_tokens = 0",
+                        "provider_timeout_seconds = 0",
                         "[providers.openrouter_planner]",
                         "input_cost_per_million_tokens = -1",
                     ]

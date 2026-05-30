@@ -284,7 +284,7 @@ def _apply_contextual_adjustments(
         selected_ops = [str(item) for item in (recent_run_summary.get("selected_ops") or [])]
         if run_status in {"degraded", "failed"}:
             upsert("critique", 0.82, [f"recent run status={run_status}"], "degraded or failed recent runs justify a stronger failure-seeking pass")
-        if stop_reason in {"max_total_tokens", "max_cost_usd", "max_wall_seconds"}:
+        if stop_reason in {"max_total_tokens", "max_cost_usd", "max_wall_seconds", "provider_timeout", "provider_failure"}:
             upsert("close", 0.84, [f"recent stop reason={stop_reason}"], "budget-bounded recent runs increase the value of explicit closure and handoff")
             upsert("handoff", 0.81, [f"recent stop reason={stop_reason}"], "budget-bounded recent runs increase the value of a clean continuation artifact")
         if "branch" in selected_ops or "compare" in selected_ops:

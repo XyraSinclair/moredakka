@@ -39,7 +39,8 @@ class DefaultsConfig:
     novelty_threshold: float = 0.15
     max_total_tokens: int | None = None
     max_cost_usd: float | None = None
-    max_wall_seconds: int | None = None
+    max_wall_seconds: int | None = 300
+    provider_timeout_seconds: int | None = 90
 
 
 @dataclass
@@ -169,6 +170,8 @@ def _validate_config(cfg: AppConfig) -> AppConfig:
         raise RuntimeError("defaults.max_cost_usd must be non-negative when set")
     if cfg.defaults.max_wall_seconds is not None and cfg.defaults.max_wall_seconds < 1:
         raise RuntimeError("defaults.max_wall_seconds must be at least 1 when set")
+    if cfg.defaults.provider_timeout_seconds is not None and cfg.defaults.provider_timeout_seconds < 1:
+        raise RuntimeError("defaults.provider_timeout_seconds must be at least 1 when set")
 
     unknown_kinds = [
         f"{name}={provider.kind}"
@@ -264,6 +267,11 @@ def load_config(*, cwd: Path, explicit_path: str | None = None) -> AppConfig:
             int(defaults["max_wall_seconds"])
             if defaults.get("max_wall_seconds") is not None
             else cfg.defaults.max_wall_seconds
+        ),
+        provider_timeout_seconds=(
+            int(defaults["provider_timeout_seconds"])
+            if defaults.get("provider_timeout_seconds") is not None
+            else cfg.defaults.provider_timeout_seconds
         ),
     )
 

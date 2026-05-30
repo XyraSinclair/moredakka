@@ -41,6 +41,13 @@ def _build_parser() -> argparse.ArgumentParser:
         subparser.add_argument("--base-ref", type=str, default=None, help="Base ref for review mode.")
         subparser.add_argument("--rounds", type=int, default=None, help="Max role-critique rounds.")
         subparser.add_argument("--char-budget", type=int, default=None, help="Max chars for packed context.")
+        subparser.add_argument("--max-wall-seconds", type=int, default=None, help="Hard wall-clock bound for the workflow.")
+        subparser.add_argument(
+            "--provider-timeout-seconds",
+            type=int,
+            default=None,
+            help="Hard timeout for each uncached provider call.",
+        )
         subparser.add_argument("--no-cache", action="store_true", help="Disable local response caching.")
         subparser.add_argument(
             "--format",
@@ -130,6 +137,8 @@ def main(argv: list[str] | None = None) -> int:
             base_ref=args.base_ref,
             rounds=rounds,
             char_budget=args.char_budget,
+            max_wall_seconds=args.max_wall_seconds,
+            provider_timeout_seconds=args.provider_timeout_seconds,
             use_cache=not args.no_cache,
         )
     except RuntimeError as exc:

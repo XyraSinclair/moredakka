@@ -5,6 +5,8 @@ base_ref = "main"
 char_budget = 24000
 cache_dir = ".moredakka/cache"
 novelty_threshold = 0.15
+max_wall_seconds = 300
+provider_timeout_seconds = 90
 
 [providers.openrouter_planner]
 kind = "openrouter"

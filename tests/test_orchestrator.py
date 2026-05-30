@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 import unittest
 import threading
 import tempfile
@@ -208,6 +209,27 @@ class _LowNoveltyProvider:
         )
 
 
+class _SleepingProvider:
+    supports_previous_response_id = False
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.model = f"{name}-model"
+
+    def generate_json(
+        self,
+        *,
+        system: str,
+        user: str,
+        schema_name: str,
+        schema: dict[str, object],
+        previous_response_id: str | None = None,
+    ) -> ProviderResult:
+        del system, user, schema_name, schema, previous_response_id
+        time.sleep(30)
+        raise AssertionError("sleeping provider should have been killed by the hard timeout")
+
+
 class PromptCompilationTests(unittest.TestCase):
     def test_role_prompt_includes_directive_and_compiled_plan(self) -> None:
         user_prompt = _role_user_prompt(
@@ -386,6 +408,138 @@ class NoveltyTests(unittest.TestCase):
         self.assertEqual(result.run_artifact["invocation"]["stop_reason"], "max_total_tokens")
         self.assertEqual(result.synthesis["selected_path"]["name"], "bounded-stop")
         self.assertEqual(result.provider_notes, ["planner: openai/openai-model"])
+
+    @patch("moredakka.orchestrator._provider_requires_process_timeout", return_value=True)
+    @patch("moredakka.surfaces.repo.render_context_packet", return_value="context")
+    @patch("moredakka.surfaces.repo.build_context_packet")
+    @patch("moredakka.orchestrator.default_role_sequence", return_value=["planner"])
+    @patch("moredakka.orchestrator.build_provider")
+    @patch("moredakka.orchestrator.load_config")
+    def test_run_workflow_degrades_when_role_provider_times_out(
+        self,
+        mock_load_config: unittest.mock.MagicMock,
+        mock_build_provider: unittest.mock.MagicMock,
+        _mock_default_role_sequence: unittest.mock.MagicMock,
+        mock_build_context_packet: unittest.mock.MagicMock,
+        _mock_render_context_packet: unittest.mock.MagicMock,
+        _mock_requires_timeout: unittest.mock.MagicMock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = AppConfig(
+                defaults=DefaultsConfig(
+                    max_rounds=1,
+                    cache_dir=".moredakka/cache",
+                    provider_timeout_seconds=1,
+                    max_wall_seconds=10,
+                ),
+                providers={
+                    "openai": ProviderConfig(
+                        name="openai",
+                        kind="openai",
+                        model="gpt-5.4",
+                        api_key_env="OPENAI_API_KEY",
+                    )
+                },
+                roles={
+                    "planner": RoleConfig(name="planner", provider="openai"),
+                    "synthesizer": RoleConfig(name="synthesizer", provider="openai"),
+                },
+            )
+            packet = ContextPacket(
+                cwd=str(root),
+                repo_root=str(root),
+                mode="plan",
+                objective="",
+                inferred_objective="objective",
+                base_ref="main",
+                branch=None,
+            )
+            mock_load_config.return_value = config
+            mock_build_provider.side_effect = lambda provider_cfg: _SleepingProvider(provider_cfg.name)
+            mock_build_context_packet.return_value = packet
+
+            started = time.perf_counter()
+            result = run_workflow(cwd=root, mode="plan", objective=None, rounds=1, use_cache=False)
+            elapsed = time.perf_counter() - started
+
+        self.assertLess(elapsed, 5)
+        self.assertEqual(result.run_artifact["invocation"]["run_status"], "degraded")
+        self.assertEqual(result.run_artifact["invocation"]["stop_reason"], "provider_timeout")
+        self.assertEqual(result.synthesis["selected_path"]["name"], "bounded-stop")
+        self.assertIn("provider_timeout", result.provider_notes[0])
+
+    @patch("moredakka.orchestrator._provider_requires_process_timeout", return_value=True)
+    @patch("moredakka.surfaces.repo.render_context_packet", return_value="context")
+    @patch("moredakka.surfaces.repo.build_context_packet")
+    @patch("moredakka.orchestrator.default_role_sequence", return_value=["planner"])
+    @patch("moredakka.orchestrator.build_provider")
+    @patch("moredakka.orchestrator.load_config")
+    def test_run_workflow_degrades_when_synthesis_provider_times_out(
+        self,
+        mock_load_config: unittest.mock.MagicMock,
+        mock_build_provider: unittest.mock.MagicMock,
+        _mock_default_role_sequence: unittest.mock.MagicMock,
+        mock_build_context_packet: unittest.mock.MagicMock,
+        _mock_render_context_packet: unittest.mock.MagicMock,
+        _mock_requires_timeout: unittest.mock.MagicMock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = AppConfig(
+                defaults=DefaultsConfig(
+                    max_rounds=1,
+                    cache_dir=".moredakka/cache",
+                    provider_timeout_seconds=1,
+                    max_wall_seconds=10,
+                ),
+                providers={
+                    "role_provider": ProviderConfig(
+                        name="role_provider",
+                        kind="openai",
+                        model="gpt-5.4",
+                        api_key_env="OPENAI_API_KEY",
+                    ),
+                    "synth_provider": ProviderConfig(
+                        name="synth_provider",
+                        kind="openai",
+                        model="gpt-5.4",
+                        api_key_env="OPENAI_API_KEY",
+                    ),
+                },
+                roles={
+                    "planner": RoleConfig(name="planner", provider="role_provider"),
+                    "synthesizer": RoleConfig(name="synthesizer", provider="synth_provider"),
+                },
+            )
+            packet = ContextPacket(
+                cwd=str(root),
+                repo_root=str(root),
+                mode="plan",
+                objective="",
+                inferred_objective="objective",
+                base_ref="main",
+                branch=None,
+            )
+            mock_load_config.return_value = config
+
+            def build(provider_cfg: ProviderConfig):
+                if provider_cfg.name == "synth_provider":
+                    return _SleepingProvider(provider_cfg.name)
+                return _LowNoveltyProvider(provider_cfg.name)
+
+            mock_build_provider.side_effect = build
+            mock_build_context_packet.return_value = packet
+
+            started = time.perf_counter()
+            result = run_workflow(cwd=root, mode="plan", objective=None, rounds=1, use_cache=False)
+            elapsed = time.perf_counter() - started
+
+        self.assertLess(elapsed, 5)
+        self.assertEqual(result.run_artifact["invocation"]["run_status"], "degraded")
+        self.assertEqual(result.run_artifact["invocation"]["stop_reason"], "provider_timeout")
+        self.assertEqual(result.synthesis["selected_path"]["name"], "bounded-stop")
+        self.assertEqual(len(result.rounds), 1)
 
     @patch("moredakka.surfaces.repo.render_context_packet", return_value="context")
     @patch("moredakka.surfaces.repo.build_context_packet")

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
+import queue
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -88,6 +90,10 @@ class CallTrace:
         if isinstance(payload, dict):
             return payload
         raise TypeError("CallTrace serialization failed")
+
+
+class ProviderCallTimeoutError(RuntimeError):
+    pass
 
 
 def _global_system_prompt() -> str:
@@ -243,6 +249,7 @@ def _cached_generate(
     schema: dict[str, Any],
     previous_response_id: str | None,
     use_cache: bool,
+    timeout_seconds: int | None = None,
 ) -> CachedCallResult:
     signature = {
         "provider": provider.name,
@@ -278,12 +285,14 @@ def _cached_generate(
             except OSError:
                 pass
     started = time.perf_counter()
-    result = provider.generate_json(
+    result = _generate_with_timeout(
+        provider=provider,
         system=system,
         user=user,
         schema_name=schema_name,
         schema=schema,
         previous_response_id=previous_response_id,
+        timeout_seconds=timeout_seconds,
     )
     duration_ms = int((time.perf_counter() - started) * 1000)
     if use_cache:
@@ -304,6 +313,74 @@ def _cached_generate(
             ),
         )
     return CachedCallResult(result=result, cache_key=key, cache_hit=False, duration_ms=duration_ms)
+
+
+def _provider_requires_process_timeout(provider: object) -> bool:
+    module = provider.__class__.__module__
+    return module.startswith("moredakka.providers.")
+
+
+def _provider_generate_worker(
+    provider: object,
+    kwargs: dict[str, Any],
+    result_queue: multiprocessing.Queue,
+) -> None:
+    try:
+        result = provider.generate_json(**kwargs)
+        result_queue.put(("ok", result))
+    except BaseException as exc:  # child process boundary
+        result_queue.put(("error", type(exc).__name__, str(exc)))
+
+
+def _generate_with_timeout(
+    *,
+    provider,
+    system: str,
+    user: str,
+    schema_name: str,
+    schema: dict[str, Any],
+    previous_response_id: str | None,
+    timeout_seconds: int | None,
+) -> ProviderResult:
+    kwargs = {
+        "system": system,
+        "user": user,
+        "schema_name": schema_name,
+        "schema": schema,
+        "previous_response_id": previous_response_id,
+    }
+    if timeout_seconds is None or not _provider_requires_process_timeout(provider):
+        return provider.generate_json(**kwargs)
+
+    ctx = multiprocessing.get_context("spawn")
+    result_queue = ctx.Queue(maxsize=1)
+    process = ctx.Process(
+        target=_provider_generate_worker,
+        args=(provider, kwargs, result_queue),
+        daemon=False,
+    )
+    process.start()
+    process.join(timeout_seconds)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=5)
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=5)
+        raise ProviderCallTimeoutError(
+            f"Provider {provider.name}/{provider.model} exceeded {timeout_seconds}s hard timeout."
+        )
+    try:
+        payload = result_queue.get(timeout=1)
+    except queue.Empty as exc:
+        raise RuntimeError(
+            f"Provider {provider.name}/{provider.model} exited without returning a result "
+            f"(exit code {process.exitcode})."
+        ) from exc
+    if payload[0] == "ok":
+        return payload[1]
+    _, error_type, message = payload
+    raise RuntimeError(f"Provider {provider.name}/{provider.model} failed in child process: {error_type}: {message}")
 
 
 def _call_trace(
@@ -357,6 +434,59 @@ def _budget_exceeded(config: AppConfig, usage_totals: dict[str, Any], elapsed_se
     if max_wall_seconds is not None and elapsed_seconds > max_wall_seconds:
         return "max_wall_seconds"
     return None
+
+
+def _provider_timeout_for_call(config: AppConfig, started_at) -> int | None:
+    configured = config.defaults.provider_timeout_seconds
+    max_wall_seconds = config.defaults.max_wall_seconds
+    if max_wall_seconds is None:
+        return configured
+    elapsed = (utc_now() - started_at).total_seconds()
+    remaining = int(max_wall_seconds - elapsed)
+    if remaining < 1:
+        return 1
+    if configured is None:
+        return remaining
+    return max(1, min(configured, remaining))
+
+
+def _failure_stop_reason(exc: BaseException) -> str:
+    if isinstance(exc, ProviderCallTimeoutError):
+        return "provider_timeout"
+    return "provider_failure"
+
+
+def _failed_role_output(role_name: str, exc: BaseException, *, profile: str) -> dict[str, Any]:
+    issue = {
+        "title": f"{role_name} provider call failed",
+        "detail": str(exc),
+        "severity": "high" if isinstance(exc, ProviderCallTimeoutError) else "medium",
+        "evidence": [type(exc).__name__],
+    }
+    risk = {
+        "name": "partial role coverage",
+        "impact": f"The {role_name} role did not return model evidence for this run.",
+        "likelihood": "medium",
+        "mitigation": "Use the partial report, inspect the run artifact, and rerun with lower rounds, lower char budget, or a different provider if needed.",
+    }
+    common = {
+        "role": role_name,
+        "focus": "provider failure",
+        "one_sentence_take": f"{role_name} could not complete because {type(exc).__name__}: {exc}",
+        "observations": [],
+        "top_problems": [issue],
+        "candidate_paths": [],
+        "risks": [risk],
+        "assumptions": [],
+        "questions": [],
+        "stop_conditions": [f"Stopped or degraded because {type(exc).__name__} occurred."],
+        "confidence": 0.0,
+    }
+    if profile == "software":
+        common.update({"recommended_steps": [], "tests": [], "edits": []})
+    else:
+        common.update({"recommended_actions": [], "validation_checks": []})
+    return common
 
 
 def _fallback_synthesis(
@@ -465,7 +595,7 @@ def _augment_synthesis_artifacts(
         updated["status_ledger"] = {
             "done": [f"Collected {len(rounds)} bounded role round(s)."] if rounds else [],
             "remaining": next_titles[:3] or ["Review selected path and execute the highest-leverage next step."],
-            "blocked": [f"Stopped because {stop_reason}."] if stop_reason in {"max_total_tokens", "max_cost_usd", "max_wall_seconds", "error"} else [],
+            "blocked": [f"Stopped because {stop_reason}."] if stop_reason in {"max_total_tokens", "max_cost_usd", "max_wall_seconds", "provider_timeout", "provider_failure", "error"} else [],
             "next": next_titles[:2] or [selected_path.get("summary", "Proceed with the selected path.")],
         }
 
@@ -536,6 +666,7 @@ def _run_artifact_payload(
             "max_total_tokens": config.defaults.max_total_tokens,
             "max_cost_usd": config.defaults.max_cost_usd,
             "max_wall_seconds": config.defaults.max_wall_seconds,
+            "provider_timeout_seconds": config.defaults.provider_timeout_seconds,
         },
         "repo": repo_info,
         "config": config_info,
@@ -566,6 +697,8 @@ def run_workflow(
     base_ref: str | None = None,
     rounds: int | None = None,
     char_budget: int | None = None,
+    max_wall_seconds: int | None = None,
+    provider_timeout_seconds: int | None = None,
     use_cache: bool = True,
 ) -> WorkflowResult:
     started_at = utc_now()
@@ -595,6 +728,14 @@ def run_workflow(
         base_ref = base_ref or config.defaults.base_ref
         rounds = rounds or config.defaults.max_rounds
         char_budget = char_budget or config.defaults.char_budget
+        if max_wall_seconds is not None:
+            if max_wall_seconds < 1:
+                raise RuntimeError("--max-wall-seconds must be at least 1 when set")
+            config.defaults.max_wall_seconds = max_wall_seconds
+        if provider_timeout_seconds is not None:
+            if provider_timeout_seconds < 1:
+                raise RuntimeError("--provider-timeout-seconds must be at least 1 when set")
+            config.defaults.provider_timeout_seconds = provider_timeout_seconds
         resolved_schema_profile = schema_profile or config.defaults.schema_profile
         if resolved_schema_profile == "auto":
             resolved_schema_profile = "software" if resolved_surface_name == "repo" else "generic"
@@ -673,14 +814,29 @@ def run_workflow(
                         schema=role_analysis_schema(resolved_schema_profile),
                         previous_response_id=prev_id,
                         use_cache=use_cache,
+                        timeout_seconds=_provider_timeout_for_call(config, started_at),
                     )
                     future_to_role[future] = role_name
 
                 for future in as_completed(future_to_role):
                     role_name = future_to_role[future]
-                    cached = future.result()
                     role_cfg = config.roles[role_name]
                     provider_cfg = config.providers[role_cfg.provider]
+                    try:
+                        cached = future.result()
+                    except Exception as exc:
+                        failure_reason = _failure_stop_reason(exc)
+                        stop_reason = failure_reason
+                        run_status = "degraded"
+                        round_outputs_by_role[role_name] = _failed_role_output(
+                            role_name,
+                            exc,
+                            profile=resolved_schema_profile,
+                        )
+                        round_notes_by_role[role_name] = (
+                            f"{role_name}: {provider_cfg.name}/{provider_cfg.model} {failure_reason}"
+                        )
+                        continue
                     trace = _call_trace(
                         stage="role",
                         role_name=role_name,
@@ -705,6 +861,9 @@ def run_workflow(
             provider_notes.extend(round_notes_by_role[role_name] for role_name in role_names)
             all_rounds.append(round_outputs)
 
+            if stop_reason in {"provider_timeout", "provider_failure"}:
+                break
+
             usage_totals = accumulate_usage([trace.usage for trace in role_traces])
             budget_stop = _budget_exceeded(
                 config,
@@ -725,7 +884,7 @@ def run_workflow(
             prior_round_for_novelty = round_outputs
 
         synthesis_data: dict[str, Any]
-        if stop_reason in {"max_total_tokens", "max_cost_usd", "max_wall_seconds"}:
+        if stop_reason in {"max_total_tokens", "max_cost_usd", "max_wall_seconds", "provider_timeout", "provider_failure"}:
             synthesis_data = _fallback_synthesis(packet, all_rounds, stop_reason=stop_reason, schema_profile=resolved_schema_profile)
         else:
             synth_provider_name = config.roles["synthesizer"].provider
@@ -744,42 +903,54 @@ def run_workflow(
                 selected_ops_text=selected_ops_text,
                 final_artifact_text=final_artifact_text,
             )
-            synthesis_cached = _cached_generate(
-                provider=synth_provider,
-                cache_dir=cache_dir,
-                system=system,
-                user=synthesis_prompt,
-                schema_name=schema_name_for_profile(SYNTHESIS_SCHEMA_NAME, resolved_schema_profile),
-                schema=synthesis_schema(resolved_schema_profile),
-                previous_response_id=None,
-                use_cache=use_cache,
-            )
-            synthesis_trace = _call_trace(
-                stage="synthesis",
-                role_name="synthesizer",
-                round_index=None,
-                provider_config=synth_provider_cfg,
-                cached=synthesis_cached,
-                previous_response_id=None,
-                schema_name=schema_name_for_profile(SYNTHESIS_SCHEMA_NAME, resolved_schema_profile),
-                system_prompt=system,
-                user_prompt=synthesis_prompt,
-            )
-            if not minimal_shape_ok(synthesis_cached.result.data, synthesis=True, profile=resolved_schema_profile):
-                raise RuntimeError(
-                    f"Provider {synthesis_cached.result.provider}/{synthesis_cached.result.model} returned malformed synthesis output."
+            try:
+                synthesis_cached = _cached_generate(
+                    provider=synth_provider,
+                    cache_dir=cache_dir,
+                    system=system,
+                    user=synthesis_prompt,
+                    schema_name=schema_name_for_profile(SYNTHESIS_SCHEMA_NAME, resolved_schema_profile),
+                    schema=synthesis_schema(resolved_schema_profile),
+                    previous_response_id=None,
+                    use_cache=use_cache,
+                    timeout_seconds=_provider_timeout_for_call(config, started_at),
                 )
-            synthesis_data = synthesis_cached.result.data
-            provider_notes.append(f"synthesizer: {synthesis_cached.result.provider}/{synthesis_cached.result.model}")
-
-            post_synthesis_budget = _budget_exceeded(
-                config,
-                accumulate_usage([trace.usage for trace in role_traces + [synthesis_trace]]),
-                (utc_now() - started_at).total_seconds(),
-            )
-            if post_synthesis_budget:
-                stop_reason = post_synthesis_budget
+            except Exception as exc:
+                stop_reason = _failure_stop_reason(exc)
                 run_status = "degraded"
+                synthesis_data = _fallback_synthesis(
+                    packet,
+                    all_rounds,
+                    stop_reason=stop_reason,
+                    schema_profile=resolved_schema_profile,
+                )
+            else:
+                synthesis_trace = _call_trace(
+                    stage="synthesis",
+                    role_name="synthesizer",
+                    round_index=None,
+                    provider_config=synth_provider_cfg,
+                    cached=synthesis_cached,
+                    previous_response_id=None,
+                    schema_name=schema_name_for_profile(SYNTHESIS_SCHEMA_NAME, resolved_schema_profile),
+                    system_prompt=system,
+                    user_prompt=synthesis_prompt,
+                )
+                if not minimal_shape_ok(synthesis_cached.result.data, synthesis=True, profile=resolved_schema_profile):
+                    raise RuntimeError(
+                        f"Provider {synthesis_cached.result.provider}/{synthesis_cached.result.model} returned malformed synthesis output."
+                    )
+                synthesis_data = synthesis_cached.result.data
+                provider_notes.append(f"synthesizer: {synthesis_cached.result.provider}/{synthesis_cached.result.model}")
+
+                post_synthesis_budget = _budget_exceeded(
+                    config,
+                    accumulate_usage([trace.usage for trace in role_traces + [synthesis_trace]]),
+                    (utc_now() - started_at).total_seconds(),
+                )
+                if post_synthesis_budget:
+                    stop_reason = post_synthesis_budget
+                    run_status = "degraded"
 
         synthesis_data = _augment_synthesis_artifacts(
             synthesis_data,
